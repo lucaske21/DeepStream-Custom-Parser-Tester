@@ -245,6 +245,7 @@ static bool runGoldenTest(
     /* Unmatched actual detections count as false positives. */
     for (size_t ai = 0; ai < actual.size(); ++ai) {
         if (!matched[ai]) {
+            allPassed = false;
             std::cout << "  [FP]  actual cls=" << actual[ai].classId
                       << " conf=" << actual[ai].detectionConfidence << "\n";
         }
