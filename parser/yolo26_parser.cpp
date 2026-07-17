@@ -139,8 +139,13 @@ bool NvDsInferParseYolo26InstanceMask(
         const float conf = det[4];
         const int   cls  = static_cast<int>(det[5]);
 
-        /* Skip low-confidence detections. */
-        if (conf < confThresh) continue;
+        /* Skip low-confidence detections (use per-class threshold when available). */
+        float clsThresh = confThresh;
+        if (cls >= 0 &&
+            static_cast<size_t>(cls) < detectionParams.perClassPreclusterThreshold.size()) {
+            clsThresh = detectionParams.perClassPreclusterThreshold[static_cast<size_t>(cls)];
+        }
+        if (conf < clsThresh) continue;
 
         /* Skip degenerate boxes. */
         if (x2 <= x1 || y2 <= y1) continue;
