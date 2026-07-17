@@ -202,8 +202,7 @@ bool OrtRunner::run(const std::vector<float>&    inputData,
  * @param netH       Network input height.
  * @param ppInfo     [out] Preprocessing metadata (scale, padding, etc.).
  * @param inputData  [out] Flat FP32 NCHW tensor ready for OrtRunner::run().
- * @return           The letterboxed BGR image (useful for debug display).
- *                   Returns an empty Mat on failure.
+ * @return           The original (un-letterboxed) BGR image; empty Mat on failure.
  */
 cv::Mat preprocessImage(const std::string& imagePath,
                         int netW, int netH,
