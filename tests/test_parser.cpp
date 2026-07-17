@@ -245,11 +245,15 @@ static void test_mask_values() {
     std::cout << "\n[test_mask_values]\n";
 
     const int NUM_DETS = 1, COLS = 38;
+    /* 38 = DET_FIXED_COLS(6) + NUM_PROTO_COEFFS(32) */
+    const int DET_FIXED = 6, NUM_COEFFS = COLS - DET_FIXED;
     std::vector<float> det0(NUM_DETS * COLS, 0.0f);
     det0[0] = 0.0f; det0[1] = 0.0f; det0[2] = 320.0f; det0[3] = 320.0f;
     det0[4] = 0.99f; det0[5] = 0.0f;
     /* Put non-zero coefficients to get non-trivial mask values. */
-    for (int k = 6; k < 38; ++k) det0[k] = (k % 3 == 0) ? 1.0f : -0.5f;
+    for (int k = 0; k < NUM_COEFFS; ++k) {
+        det0[DET_FIXED + k] = (k % 3 == 0) ? 1.0f : -0.5f;
+    }
 
     std::vector<float> proto(32 * 8 * 8, 0.5f);  /* use small proto for speed */
 

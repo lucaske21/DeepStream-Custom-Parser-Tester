@@ -155,8 +155,10 @@ cv::Mat Visualizer::visualize(
             croppedMask.convertTo(dbg, CV_8U, 255.0f);
             const std::string path =
                 maskDumpDir + "/mask_raw_" + std::to_string(idx) + ".png";
-            cv::imwrite(path, dbg);
-            std::cout << "[Visualizer] Saved " << path << "\n";
+            if (cv::imwrite(path, dbg))
+                std::cout << "[Visualizer] Saved " << path << "\n";
+            else
+                std::cerr << "[Visualizer] Failed to save " << path << "\n";
         }
 
         /* Resize crop to original-image-space bbox size. */
@@ -170,8 +172,10 @@ cv::Mat Visualizer::visualize(
             resizedMask.convertTo(dbg, CV_8U, 255.0f);
             const std::string path =
                 maskDumpDir + "/mask_resize_" + std::to_string(idx) + ".png";
-            cv::imwrite(path, dbg);
-            std::cout << "[Visualizer] Saved " << path << "\n";
+            if (cv::imwrite(path, dbg))
+                std::cout << "[Visualizer] Saved " << path << "\n";
+            else
+                std::cerr << "[Visualizer] Failed to save " << path << "\n";
         }
 
         /* Threshold at 0.5 to get a binary mask. */
@@ -182,8 +186,10 @@ cv::Mat Visualizer::visualize(
         if (dumpMask) {
             const std::string path =
                 maskDumpDir + "/mask_final_" + std::to_string(idx) + ".png";
-            cv::imwrite(path, binaryMask);
-            std::cout << "[Visualizer] Saved " << path << "\n";
+            if (cv::imwrite(path, binaryMask))
+                std::cout << "[Visualizer] Saved " << path << "\n";
+            else
+                std::cerr << "[Visualizer] Failed to save " << path << "\n";
         }
 
         /* Paint the colour overlay onto the overlay Mat inside the bbox. */

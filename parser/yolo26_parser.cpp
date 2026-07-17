@@ -182,6 +182,10 @@ bool NvDsInferParseYolo26InstanceMask(
         info.width              = cx2 - cx1;
         info.height             = cy2 - cy1;
         info.detectionConfidence = conf;
+        if (cls < 0) {
+            std::cerr << "[yolo26_parser] Warning: detection " << i
+                      << " has negative class_id=" << cls << "; clamped to 0.\n";
+        }
         info.classId            = (cls >= 0) ? cls : 0;
         info.mask               = maskBuf;
         info.mask_width         = static_cast<int>(protoW);

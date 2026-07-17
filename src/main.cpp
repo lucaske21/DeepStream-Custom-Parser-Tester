@@ -303,9 +303,41 @@ int main(int argc, char* argv[])
 
     if (outputPath.empty()) outputPath = "output/result.jpg";
 
-    const float confThresh = confStr.empty()  ? 0.25f : static_cast<float>(std::atof(confStr.c_str()));
-    const int   netW       = widthStr.empty() ? 640   : std::atoi(widthStr.c_str());
-    const int   netH       = heightStr.empty()? 640   : std::atoi(heightStr.c_str());
+    /* Parse --conf with explicit error checking. */
+    float confThresh = 0.25f;
+    if (!confStr.empty()) {
+        char* endPtr = nullptr;
+        const float parsed = static_cast<float>(std::strtod(confStr.c_str(), &endPtr));
+        if (endPtr == confStr.c_str() || *endPtr != '\0' || parsed < 0.0f || parsed > 1.0f) {
+            std::cerr << "Error: --conf must be a float in [0,1], got: " << confStr << "\n";
+            return 1;
+        }
+        confThresh = parsed;
+    }
+
+    /* Parse --width with explicit error checking. */
+    int netW = 640;
+    if (!widthStr.empty()) {
+        char* endPtr = nullptr;
+        const long parsed = std::strtol(widthStr.c_str(), &endPtr, 10);
+        if (endPtr == widthStr.c_str() || *endPtr != '\0' || parsed <= 0) {
+            std::cerr << "Error: --width must be a positive integer, got: " << widthStr << "\n";
+            return 1;
+        }
+        netW = static_cast<int>(parsed);
+    }
+
+    /* Parse --height with explicit error checking. */
+    int netH = 640;
+    if (!heightStr.empty()) {
+        char* endPtr = nullptr;
+        const long parsed = std::strtol(heightStr.c_str(), &endPtr, 10);
+        if (endPtr == heightStr.c_str() || *endPtr != '\0' || parsed <= 0) {
+            std::cerr << "Error: --height must be a positive integer, got: " << heightStr << "\n";
+            return 1;
+        }
+        netH = static_cast<int>(parsed);
+    }
 
     std::vector<std::string> classNames = getClassNames(args);
     if (classNames.empty()) classNames.push_back("object");
