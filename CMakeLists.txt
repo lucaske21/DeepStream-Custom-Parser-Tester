@@ -2,9 +2,9 @@ cmake_minimum_required(VERSION 3.10)
 project(deepstream_parser_tester CXX)
 
 # ---------------------------------------------------------------------------
-# Language standard: C++11, no GNU extensions.
+# Language standard: C++17, no GNU extensions.
 # ---------------------------------------------------------------------------
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 

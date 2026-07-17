@@ -448,8 +448,8 @@ int main(int argc, char* argv[])
     /* ------------------------------------------------------------------ */
     /* Step 5 – Call the custom parser loaded from .so.                     */
     /* ------------------------------------------------------------------ */
-    std::cout << "\n[Step 5] Calling " << parserCfg.funcName
-              << "() from " << parserCfg.soPath << "\n";
+    std::cout << "\n[Step 5] Calling " << parserFuncName
+              << "() from " << parserSoPath << "\n";
 
     NvDsInferNetworkInfo netInfo;
     netInfo.width    = static_cast<unsigned int>(netW);
