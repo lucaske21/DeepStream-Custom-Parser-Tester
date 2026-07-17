@@ -10,9 +10,8 @@
  * Options
  *   --image <path>            Input image (required).
  *   --model <path>            ONNX model file (required).
- *   --config <path>           Parser config file (default: config/parser.conf).
- *   --parser-so <path>        Parser shared library (.so) – overrides config.
- *   --parser-func <name>      C-linkage function name inside .so – overrides config.
+ *   --parser-so <path>        Parser shared library (.so) (required).
+ *   --parser-func <name>      C-linkage function name inside .so (required).
  *   --output <path>           Save annotated result image (default: output/result.jpg).
  *   --conf <float>            Confidence threshold (default: 0.25).
  *   --classes <names...>      Class names, space-separated (default: "object").
@@ -76,9 +75,8 @@ static void printUsage(const char* prog) {
         "Usage: " << prog << " --image <img.jpg> --model <model.onnx> [options]\n\n"
         "  --image       <path>        Input image (required)\n"
         "  --model       <path>        ONNX model (required)\n"
-        "  --config      <path>        Parser config file (default: config/parser.conf)\n"
-        "  --parser-so   <path>        Parser .so path (overrides config)\n"
-        "  --parser-func <name>        Parser function name (overrides config)\n"
+        "  --parser-so   <path>        Parser .so path (required)\n"
+        "  --parser-func <name>        Parser function name (required)\n"
         "  --output      <path>        Annotated output image (default: output/result.jpg)\n"
         "  --conf        <float>       Confidence threshold (default: 0.25)\n"
         "  --classes     <n0 n1 ...>   Class names (default: \"object\")\n"
@@ -110,7 +108,7 @@ static const char* const KNOWN_FLAGS[] = {
     "--image", "--model", "--output", "--conf",
     "--classes", "--width", "--height",
     "--dump-tensor", "--dump-mask", "--no-display",
-    "--compare", "--config", "--parser-so", "--parser-func",
+    "--compare", "--parser-so", "--parser-func",
     "--help", "-h", nullptr
 };
 
@@ -133,47 +131,6 @@ static std::vector<std::string> getClassNames(const std::vector<std::string>& ar
         }
     }
     return names;
-}
-
-/* -------------------------------------------------------------------------- */
-/* Config file reader                                                          */
-/* -------------------------------------------------------------------------- */
-
-/** Trim leading and trailing whitespace from a string. */
-static std::string trimStr(const std::string& s) {
-    const size_t begin = s.find_first_not_of(" \t\r\n");
-    if (begin == std::string::npos) return "";
-    const size_t end = s.find_last_not_of(" \t\r\n");
-    return s.substr(begin, end - begin + 1);
-}
-
-struct ParserConfig {
-    std::string soPath;
-    std::string funcName;
-};
-
-/**
- * Read a simple key = value config file.
- * Lines starting with '#' or blank lines are ignored.
- */
-static bool readParserConfig(const std::string& path, ParserConfig& cfg) {
-    std::ifstream f(path);
-    if (!f) {
-        std::cerr << "[config] Cannot open config file: " << path << "\n";
-        return false;
-    }
-    std::string line;
-    while (std::getline(f, line)) {
-        const std::string trimmed = trimStr(line);
-        if (trimmed.empty() || trimmed[0] == '#') continue;
-        const size_t eq = trimmed.find('=');
-        if (eq == std::string::npos) continue;
-        const std::string key = trimStr(trimmed.substr(0, eq));
-        const std::string val = trimStr(trimmed.substr(eq + 1));
-        if (key == "parser_so")   cfg.soPath   = val;
-        if (key == "parser_func") cfg.funcName = val;
-    }
-    return true;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -348,7 +305,7 @@ int main(int argc, char* argv[])
     /* ------------------------------------------------------------------ */
     std::string imagePath, modelPath, outputPath, comparePath;
     std::string confStr, widthStr, heightStr;
-    std::string configPath, parserSoCli, parserFuncCli;
+    std::string parserSoPath, parserFuncName;
     bool dumpTensor = hasFlag(args, "--dump-tensor");
     bool dumpMask   = hasFlag(args, "--dump-mask");
     bool noDisplay  = hasFlag(args, "--no-display");
@@ -365,12 +322,10 @@ int main(int argc, char* argv[])
     getArg(args, "--conf",        confStr);
     getArg(args, "--width",       widthStr);
     getArg(args, "--height",      heightStr);
-    getArg(args, "--config",      configPath);
-    getArg(args, "--parser-so",   parserSoCli);
-    getArg(args, "--parser-func", parserFuncCli);
+    getArg(args, "--parser-so",   parserSoPath);
+    getArg(args, "--parser-func", parserFuncName);
 
     if (outputPath.empty()) outputPath = "output/result.jpg";
-    if (configPath.empty()) configPath = "config/parser.conf";
 
     /* Parse --conf with explicit error checking. */
     float confThresh = 0.25f;
@@ -411,50 +366,30 @@ int main(int argc, char* argv[])
     std::vector<std::string> classNames = getClassNames(args);
     if (classNames.empty()) classNames.push_back("object");
 
-    /* ------------------------------------------------------------------ */
-    /* Load parser config and resolve .so path + function name.             */
-    /* ------------------------------------------------------------------ */
-    ParserConfig parserCfg;
-    /* Read config file (errors are non-fatal if CLI overrides are given). */
-    if (!readParserConfig(configPath, parserCfg) &&
-        (parserSoCli.empty() || parserFuncCli.empty())) {
-        std::cerr << "Error: config file '" << configPath
-                  << "' could not be read and --parser-so / --parser-func "
-                     "are not both provided.\n";
-        return 1;
-    }
-    /* CLI flags take precedence over the config file. */
-    if (!parserSoCli.empty())   parserCfg.soPath   = parserSoCli;
-    if (!parserFuncCli.empty()) parserCfg.funcName = parserFuncCli;
-
-    if (parserCfg.soPath.empty()) {
-        std::cerr << "Error: parser_so is not set (check config or use --parser-so).\n";
-        return 1;
-    }
-    if (parserCfg.funcName.empty()) {
-        std::cerr << "Error: parser_func is not set (check config or use --parser-func).\n";
+    if (parserSoPath.empty() || parserFuncName.empty()) {
+        std::cerr << "Error: --parser-so and --parser-func are required.\n";
         return 1;
     }
 
-    std::cout << "\n[Config] Parser .so  : " << parserCfg.soPath   << "\n";
-    std::cout << "[Config] Parser func : " << parserCfg.funcName << "\n";
+    std::cout << "\n[Config] Parser .so  : " << parserSoPath << "\n";
+    std::cout << "[Config] Parser func : " << parserFuncName << "\n";
 
     /* ------------------------------------------------------------------ */
     /* Load parser .so via dlopen / dlsym.                                  */
     /* ------------------------------------------------------------------ */
-    void* soHandle = dlopen(parserCfg.soPath.c_str(), RTLD_NOW);
+    void* soHandle = dlopen(parserSoPath.c_str(), RTLD_NOW);
     if (!soHandle) {
-        std::cerr << "Error: dlopen('" << parserCfg.soPath
+        std::cerr << "Error: dlopen('" << parserSoPath
                   << "') failed: " << dlerror() << "\n";
         return 1;
     }
 
     /* Clear any previous error before calling dlsym. */
     dlerror();
-    void* sym = dlsym(soHandle, parserCfg.funcName.c_str());
+    void* sym = dlsym(soHandle, parserFuncName.c_str());
     const char* dlErr = dlerror();
     if (dlErr) {
-        std::cerr << "Error: dlsym('" << parserCfg.funcName
+        std::cerr << "Error: dlsym('" << parserFuncName
                   << "') failed: " << dlErr << "\n";
         dlclose(soHandle);
         return 1;
