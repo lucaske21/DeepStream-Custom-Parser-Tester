@@ -148,8 +148,8 @@ cv::Mat Visualizer::visualize(
 
         const int px1 = std::max(0, static_cast<int>(x1Net * sx));
         const int py1 = std::max(0, static_cast<int>(y1Net * sy));
-        const int px2 = std::min(protoW - 1, static_cast<int>(x2Net * sx));
-        const int py2 = std::min(protoH - 1, static_cast<int>(y2Net * sy));
+        const int px2 = std::min(protoW, static_cast<int>(x2Net * sx));
+        const int py2 = std::min(protoH, static_cast<int>(y2Net * sy));
 
         if (px2 <= px1 || py2 <= py1) continue;
 
