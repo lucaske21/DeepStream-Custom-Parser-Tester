@@ -451,8 +451,7 @@ int main(int argc, char* argv[])
 
     /* Clear any previous error before calling dlsym. */
     dlerror();
-    NvDsParserFunc parserFunc = reinterpret_cast<NvDsParserFunc>(
-        dlsym(soHandle, parserCfg.funcName.c_str()));
+    void* sym = dlsym(soHandle, parserCfg.funcName.c_str());
     const char* dlErr = dlerror();
     if (dlErr) {
         std::cerr << "Error: dlsym('" << parserCfg.funcName
@@ -460,6 +459,10 @@ int main(int argc, char* argv[])
         dlclose(soHandle);
         return 1;
     }
+    /* POSIX guarantees that void* and function pointers are interchangeable
+     * via dlsym.  Use memcpy to satisfy strict-aliasing rules. */
+    NvDsParserFunc parserFunc = nullptr;
+    std::memcpy(&parserFunc, &sym, sizeof(parserFunc));
 
     const std::string outDir = "output";
 
