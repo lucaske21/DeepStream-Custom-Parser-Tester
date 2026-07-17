@@ -119,7 +119,15 @@ cv::Mat Visualizer::visualize(
                       cv::Point(lx1, ly1),
                       cv::Point(lx1 + textSz.width + 2, ly1 + textSz.height + 4),
                       color, cv::FILLED);
+        cv::rectangle(overlay,
+                      cv::Point(lx1, ly1),
+                      cv::Point(lx1 + textSz.width + 2, ly1 + textSz.height + 4),
+                      color, cv::FILLED);
         cv::putText(result, label,
+                    cv::Point(lx1 + 1, ly1 + textSz.height + 1),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.5,
+                    cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+        cv::putText(overlay, label,
                     cv::Point(lx1 + 1, ly1 + textSz.height + 1),
                     cv::FONT_HERSHEY_SIMPLEX, 0.5,
                     cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
