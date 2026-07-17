@@ -43,15 +43,30 @@ void TensorAdapter::adapt(const std::vector<TensorInfo>&   tensorInfos,
         }
 
         const size_t numDims = shape.size() - startDim;
-        layer.inferDims.numDims    = static_cast<unsigned int>(numDims);
+        if (numDims > NVDSINFER_MAX_DIMS) {
+            std::cerr << "[TensorAdapter] Error: tensor \"" << ti.name
+                      << "\" has " << numDims
+                      << " dims, exceeds NVDSINFER_MAX_DIMS=" << NVDSINFER_MAX_DIMS << "\n";
+            continue;
+        }
+
+        layer.inferDims.numDims     = static_cast<unsigned int>(numDims);
         layer.inferDims.numElements = 1;
 
+        bool dimsOk = true;
         for (size_t d = 0; d < numDims; ++d) {
-            const unsigned int dim =
-                static_cast<unsigned int>(shape[startDim + d]);
-            layer.inferDims.d[d]       = dim;
+            const int64_t dim64 = shape[startDim + d];
+            if (dim64 <= 0) {
+                std::cerr << "[TensorAdapter] Error: tensor \"" << ti.name
+                          << "\" has non-positive dim[" << d << "]=" << dim64 << "\n";
+                dimsOk = false;
+                break;
+            }
+            const unsigned int dim = static_cast<unsigned int>(dim64);
+            layer.inferDims.d[d]        = dim;
             layer.inferDims.numElements *= dim;
         }
+        if (!dimsOk) continue;
 
         /* Zero-fill remaining dimension slots. */
         for (size_t d = numDims; d < NVDSINFER_MAX_DIMS; ++d) {
