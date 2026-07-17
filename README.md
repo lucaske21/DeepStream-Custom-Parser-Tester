@@ -6,7 +6,7 @@ DeepStream / GStreamer pipeline.
 
 The key design principle: **the parser lives in a separate `.so`** that you
 build yourself (or get from a third party).  The tester loads it at runtime
-via `dlopen` / `dlsym` using a small config file—no recompilation of the
+via `dlopen` / `dlsym` using command-line arguments—no recompilation of the
 tester required when you swap parsers.
 
 ## Features
@@ -17,13 +17,11 @@ tester required when you swap parsers.
 | **ONNX Runtime backend** | Load `.onnx` models, run FP32 inference |
 | **Tensor Adapter** | Converts `Ort::Value` output to `NvDsInferLayerInfo` |
 | **Dynamic parser loading** | Parser `.so` loaded via `dlopen`/`dlsym` at runtime |
-| **Config file** | `config/parser.conf` — set `.so` path and function name |
 | **OpenCV visualiser** | Bounding boxes + semi-transparent instance masks |
 | **JSON export** | Detection results in nlohmann/json format |
 | **Tensor dump** | `--dump-tensor`: save raw output `.bin` files |
 | **Mask debug** | `--dump-mask`: save raw / resized / binary mask PNGs |
 | **Golden regression** | `--compare expected.json`: IoU + confidence check |
-| **Unit tests** | Parser tests compile without ONNX Runtime |
 
 ---
 
@@ -49,7 +47,7 @@ Input image (JPEG / PNG)
    (TensorInfo → NvDsInferLayerInfo)
         │
         ▼
-   dlopen(parser_so) + dlsym(parser_func)   ← config/parser.conf
+     dlopen(parser_so) + dlsym(parser_func)   ← command-line arguments
    (your custom parser .so)
         │
         ▼
@@ -70,8 +68,6 @@ Input image (JPEG / PNG)
 deepstream_parser_tester/
 ├── CMakeLists.txt
 ├── README.md
-├── config/
-│   └── parser.conf          ← Set parser_so and parser_func here
 ├── include/
 │   ├── fake_nvdsinfer.h     ← Fake DeepStream structs (no SDK needed)
 │   ├── ort_runner.h         ← ONNX Runtime wrapper
@@ -82,11 +78,7 @@ deepstream_parser_tester/
 │   ├── ort_runner.cpp
 │   ├── tensor_adapter.cpp
 │   └── visualizer.cpp
-├── parser/
-│   ├── yolo26_parser.h      ← Reference parser API
-│   └── yolo26_parser.cpp    ← Reference YOLO26-seg parser (built as .so)
 ├── tests/
-│   ├── test_parser.cpp      ← Standalone parser unit tests
 │   └── expected.json        ← Golden test fixture
 ├── models/                  ← Place .onnx files here
 ├── images/                  ← Place test images here
@@ -138,32 +130,12 @@ make -j$(nproc)
 | Artifact | Description |
 |---|---|
 | `build/parser_tester` | The main CLI tool |
-| `build/libyolo26_parser.so` | Reference parser plugin (ready to use) |
-| `build/config/parser.conf` | Config file copied from `config/parser.conf` |
-
-### Build with real DeepStream SDK headers (optional)
-
-```bash
-cmake .. -DHAVE_DEEPSTREAM=ON \
-         -DORT_ROOT=/path/to/onnxruntime
-make -j$(nproc)
-```
 
 ---
 
-## Parser Config File
+## Parser Arguments
 
-Edit `build/config/parser.conf` (or `config/parser.conf`) before running:
-
-```ini
-# Path to your compiled parser shared library (.so)
-parser_so   = ./libyolo26_parser.so
-
-# C-linkage function name exported by the .so
-parser_func = NvDsInferParseYolo26InstanceMask
-```
-
-You can also override either value on the command line:
+Pass the parser shared library and its exported C-linkage function explicitly:
 
 ```bash
 ./parser_tester --image img.jpg --model model.onnx \
@@ -197,42 +169,6 @@ g++ -std=c++11 -shared -fPIC \
     my_parser.cpp
 ```
 
-Then update `config/parser.conf`:
-
-```ini
-parser_so   = /absolute/path/to/my_parser.so
-parser_func = MyParserFunction
-```
-
-> **Tip:** The bundled `parser/yolo26_parser.cpp` is a complete working example
-> you can use as a starting point.
-
----
-
-## Run Parser Unit Tests (no ONNX Runtime required)
-
-```bash
-cd build
-ctest --output-on-failure
-# or run directly:
-./test_parser
-```
-
-Expected output:
-
-```
-=== yolo26_parser unit tests ===
-[test_basic_detection]
-  [PASS] parser returned true
-  [PASS] exactly 1 detection
-  ...
-=============================
-Passed: 19
-Failed: 0
-```
-
----
-
 ## Run the Tester
 
 ### Basic usage
@@ -240,22 +176,14 @@ Failed: 0
 ```bash
 cd build
 
-# Edit config/parser.conf first (or use --parser-so / --parser-func)
 ./parser_tester \
     --image  ../images/test.jpg \
     --model  ../models/yolo26_seg.onnx \
+     --parser-so ./libmy_parser.so \
+     --parser-func MyParserFunc \
     --output ../output/result.jpg \
     --conf   0.3 \
     --classes person car bicycle
-```
-
-### Use a custom config file
-
-```bash
-./parser_tester \
-    --image  ../images/test.jpg \
-    --model  ../models/yolo26_seg.onnx \
-    --config /path/to/my_config.conf
 ```
 
 ### Save raw tensors and debug masks
@@ -264,6 +192,8 @@ cd build
 ./parser_tester \
     --image        ../images/test.jpg \
     --model        ../models/yolo26_seg.onnx \
+     --parser-so    ./libmy_parser.so \
+     --parser-func  MyParserFunc \
     --dump-tensor \
     --dump-mask \
     --no-display
@@ -287,6 +217,8 @@ output/mask_final_0.png    ← binary mask
 ./parser_tester \
     --image   ../images/test.jpg \
     --model   ../models/yolo26_seg.onnx \
+     --parser-so ./libmy_parser.so \
+     --parser-func MyParserFunc \
     --compare ../tests/expected.json
 ```
 
