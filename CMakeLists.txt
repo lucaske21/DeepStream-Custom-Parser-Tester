@@ -86,47 +86,13 @@ FetchContent_MakeAvailable(nlohmann_json)
 # ---------------------------------------------------------------------------
 include_directories(
     ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/parser
     ${ORT_INCLUDE_DIR}
     ${OpenCV_INCLUDE_DIRS})
 
 # ---------------------------------------------------------------------------
-# Parser shared library  (.so)
-#
-# Users write their own parser, build it as a .so (see README), and point
-# config/parser.conf at it.  This target builds the bundled reference parser
-# as a .so so users have a working example immediately after `make`.
-#
-# Compiled with HAVE_DEEPSTREAM undefined → picks up fake_nvdsinfer.h.
-# To compile against the real DeepStream SDK, pass:
-#   cmake -DHAVE_DEEPSTREAM=ON ..
-# ---------------------------------------------------------------------------
-option(HAVE_DEEPSTREAM "Link against the real DeepStream SDK headers" OFF)
-
-add_library(yolo26_parser SHARED
-    parser/yolo26_parser.cpp)
-
-target_include_directories(yolo26_parser PUBLIC
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/parser)
-
-# Ensure symbols have default visibility so dlsym() can find them (C linkage is provided by extern "C" in the source).
-set_target_properties(yolo26_parser PROPERTIES
-    CXX_VISIBILITY_PRESET default
-    VISIBILITY_INLINES_HIDDEN OFF)
-
-if(HAVE_DEEPSTREAM)
-    target_compile_definitions(yolo26_parser PUBLIC HAVE_DEEPSTREAM)
-    message(STATUS "HAVE_DEEPSTREAM=ON – using real nvdsinfer.h")
-else()
-    message(STATUS "HAVE_DEEPSTREAM=OFF – using fake_nvdsinfer.h (no SDK needed)")
-endif()
-
-# ---------------------------------------------------------------------------
 # Main executable
 #
-# parser_tester does NOT link yolo26_parser statically; it discovers the parser
-# at runtime via dlopen/dlsym using the path from config/parser.conf.
+# parser_tester discovers the user-supplied parser at runtime via dlopen/dlsym.
 # ---------------------------------------------------------------------------
 add_executable(parser_tester
     src/main.cpp
@@ -141,41 +107,16 @@ target_link_libraries(parser_tester
         ${OpenCV_LIBS}
         nlohmann_json::nlohmann_json)
 
-if(HAVE_DEEPSTREAM)
-    target_compile_definitions(parser_tester PRIVATE HAVE_DEEPSTREAM)
-endif()
-
 # ---------------------------------------------------------------------------
-# Ensure the output and config directories exist at build time.
-# Also copy config/parser.conf to the build directory so that parser_tester
-# can find it at its default path (config/parser.conf relative to cwd).
+# Ensure the output directory exists at build time.
 # ---------------------------------------------------------------------------
 add_custom_command(TARGET parser_tester POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
-        ${CMAKE_BINARY_DIR}/output
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        ${CMAKE_BINARY_DIR}/config
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_SOURCE_DIR}/config/parser.conf
-        ${CMAKE_BINARY_DIR}/config/parser.conf)
+        ${CMAKE_BINARY_DIR}/output)
 
 # ---------------------------------------------------------------------------
 # Installation
 # ---------------------------------------------------------------------------
 install(TARGETS parser_tester DESTINATION bin)
 
-# ---------------------------------------------------------------------------
-# Parser unit tests (no ONNX Runtime required)
-# ---------------------------------------------------------------------------
-enable_testing()
-
-add_executable(test_parser tests/test_parser.cpp parser/yolo26_parser.cpp)
-target_include_directories(test_parser PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/parser)
-if(HAVE_DEEPSTREAM)
-    target_compile_definitions(test_parser PRIVATE HAVE_DEEPSTREAM)
-endif()
-
-add_test(NAME test_parser COMMAND test_parser)
 
