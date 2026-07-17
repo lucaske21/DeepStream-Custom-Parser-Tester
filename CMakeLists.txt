@@ -110,7 +110,7 @@ target_include_directories(yolo26_parser PUBLIC
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/parser)
 
-# Export symbols with C linkage so dlsym() can find them.
+# Ensure symbols have default visibility so dlsym() can find them (C linkage is provided by extern "C" in the source).
 set_target_properties(yolo26_parser PROPERTIES
     CXX_VISIBILITY_PRESET default
     VISIBILITY_INLINES_HIDDEN OFF)
