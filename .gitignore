@@ -1,0 +1,34 @@
+# CMake build directory
+build/
+cmake-build-*/
+_deps/
+
+# Compiled binaries
+*.o
+*.a
+*.so
+*.so.*
+parser_tester
+test_parser
+
+# ONNX Runtime / model files (large binaries)
+models/*.onnx
+models/*.engine
+models/*.trt
+
+# Output artefacts (auto-generated during runs)
+output/*.jpg
+output/*.png
+output/*.bin
+output/results.json
+
+# Debug / IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS artefacts
+.DS_Store
+Thumbs.db

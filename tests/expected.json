@@ -1,0 +1,9 @@
+[
+  {
+    "class_id": 0,
+    "confidence": 0.90,
+    "bbox": [100.0, 80.0, 200.0, 150.0],
+    "mask_width": 160,
+    "mask_height": 160
+  }
+]
