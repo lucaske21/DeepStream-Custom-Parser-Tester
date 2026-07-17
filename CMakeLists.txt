@@ -98,13 +98,25 @@ include_directories(
 #   cmake -DHAVE_DEEPSTREAM=ON ..
 # ---------------------------------------------------------------------------
 option(HAVE_DEEPSTREAM "Link against the real DeepStream SDK headers" OFF)
+set(DEEPSTREAM_ROOT "/opt/nvidia/deepstream/deepstream-8.0"
+    CACHE PATH "DeepStream SDK installation root")
+
+if(HAVE_DEEPSTREAM)
+    set(DEEPSTREAM_INCLUDE_DIR "${DEEPSTREAM_ROOT}/sources/includes")
+    if(NOT EXISTS "${DEEPSTREAM_INCLUDE_DIR}/nvdsinfer.h")
+        message(FATAL_ERROR
+            "DeepStream header nvdsinfer.h not found.\n"
+            "Set -DDEEPSTREAM_ROOT=/path/to/deepstream.")
+    endif()
+endif()
 
 add_library(yolo26_parser STATIC
     parser/yolo26_parser.cpp)
 
 target_include_directories(yolo26_parser PUBLIC
     ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/parser)
+    ${CMAKE_SOURCE_DIR}/parser
+    $<$<BOOL:${HAVE_DEEPSTREAM}>:${DEEPSTREAM_INCLUDE_DIR}>)
 
 if(HAVE_DEEPSTREAM)
     target_compile_definitions(yolo26_parser PUBLIC HAVE_DEEPSTREAM)
@@ -154,9 +166,6 @@ add_executable(test_parser tests/test_parser.cpp parser/yolo26_parser.cpp)
 target_include_directories(test_parser PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/parser)
-if(HAVE_DEEPSTREAM)
-    target_compile_definitions(test_parser PRIVATE HAVE_DEEPSTREAM)
-endif()
 
 add_test(NAME test_parser COMMAND test_parser)
 
