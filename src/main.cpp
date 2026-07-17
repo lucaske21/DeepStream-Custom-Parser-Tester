@@ -459,10 +459,11 @@ int main(int argc, char* argv[])
         dlclose(soHandle);
         return 1;
     }
-    /* POSIX guarantees that void* and function pointers are interchangeable
-     * via dlsym.  Use memcpy to satisfy strict-aliasing rules. */
-    NvDsParserFunc parserFunc = nullptr;
-    std::memcpy(&parserFunc, &sym, sizeof(parserFunc));
+    /* POSIX specifies that dlsym() returns a pointer that can be cast to the
+     * correct function type on this platform. */
+    static_assert(sizeof(void*) == sizeof(NvDsParserFunc),
+                  "dlsym() pointer size does not match NvDsParserFunc");
+    NvDsParserFunc parserFunc = reinterpret_cast<NvDsParserFunc>(sym);
 
     const std::string outDir = "output";
 
