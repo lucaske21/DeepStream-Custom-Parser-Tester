@@ -65,8 +65,7 @@ cv::Mat Visualizer::visualize(
     }
 
     /* Scale factors: prototype space → network space → original image space.   */
-    /* These will be refined per-object using the mask dimensions.               */
-    (void)netInfo;  /* used below via netInfo.width / netInfo.height per object */
+    /* netInfo.width / netInfo.height are used below for per-object sx, sy.    */
 
     /* We accumulate mask overlays into a separate Mat, then blend once. */
     cv::Mat overlay = result.clone();

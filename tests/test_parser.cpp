@@ -39,7 +39,7 @@ static int g_failed = 0;
         } \
     } while (0)
 
-static float approxEq(float a, float b, float eps = 1e-4f) {
+static bool approxEq(float a, float b, float eps = 1e-4f) {
     return std::fabs(a - b) < eps;
 }
 

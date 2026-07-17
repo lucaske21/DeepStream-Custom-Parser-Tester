@@ -84,14 +84,29 @@ static bool hasFlag(const std::vector<std::string>& args, const std::string& fla
     return false;
 }
 
-/* Collect all tokens after --classes until the next -- option. */
+/* Known CLI flags – used to detect the end of a --classes list. */
+static const char* const KNOWN_FLAGS[] = {
+    "--image", "--model", "--output", "--conf",
+    "--classes", "--width", "--height",
+    "--dump-tensor", "--dump-mask", "--no-display",
+    "--compare", "--help", "-h", nullptr
+};
+
+static bool isKnownFlag(const std::string& s) {
+    for (int i = 0; KNOWN_FLAGS[i] != nullptr; ++i) {
+        if (s == KNOWN_FLAGS[i]) return true;
+    }
+    return false;
+}
+
+/* Collect all tokens after --classes until the next known flag. */
 static std::vector<std::string> getClassNames(const std::vector<std::string>& args) {
     std::vector<std::string> names;
     bool collecting = false;
     for (const auto& a : args) {
         if (a == "--classes") { collecting = true; continue; }
         if (collecting) {
-            if (!a.empty() && a[0] == '-' && a.size() > 1 && a[1] == '-') break;
+            if (isKnownFlag(a)) break;
             names.push_back(a);
         }
     }

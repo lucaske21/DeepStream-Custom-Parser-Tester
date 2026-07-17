@@ -164,11 +164,12 @@ bool NvDsInferParseYolo26InstanceMask(
         for (unsigned int h = 0; h < protoH; ++h) {
             for (unsigned int w = 0; w < protoW; ++w) {
                 float val = 0.0f;
+                const unsigned int pixelIdx = h * protoW + w;
                 for (unsigned int k = 0; k < numCoeffs; ++k) {
                     /* proto layout: [num_proto, protoH, protoW] */
-                    val += coeffs[k] * protoData[k * maskPixels + h * protoW + w];
+                    val += coeffs[k] * protoData[k * maskPixels + pixelIdx];
                 }
-                maskBuf[h * protoW + w] = sigmoid(val);
+                maskBuf[pixelIdx] = sigmoid(val);
             }
         }
 

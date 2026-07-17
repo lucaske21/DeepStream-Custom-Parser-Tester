@@ -71,10 +71,10 @@ static void bgrToNchw(const cv::Mat& img, std::vector<float>& out)
     std::vector<cv::Mat> chans(C);
     cv::split(img, chans);            /* chans[0]=B, [1]=G, [2]=R */
 
-    /* Write in RGB order (R=chans[2], G=chans[1], B=chans[0]). */
+    /* Write in RGB order: plane 0 ← R (chans[2]), plane 1 ← G (chans[1]), plane 2 ← B (chans[0]). */
     const int planeSize = H * W;
     for (int c = 0; c < C; ++c) {
-        int srcC = C - 1 - c;         /* B→2, G→1, R→0 */
+        int srcC = C - 1 - c;         /* plane 0 → chans[2]=R, plane 1 → chans[1]=G, plane 2 → chans[0]=B */
         float* dst = out.data() + c * planeSize;
         for (int y = 0; y < H; ++y) {
             const uchar* row = chans[srcC].ptr<uchar>(y);
