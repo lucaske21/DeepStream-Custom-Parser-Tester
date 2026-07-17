@@ -1,8 +1,13 @@
 # DeepStream Custom Parser Tester
 
 A **standalone C++11 framework** for developing and validating DeepStream custom
-parsers—specifically YOLO-seg instance segmentation parsers—**without** running a
-full DeepStream / GStreamer pipeline.
+parsers—specifically instance-segmentation parsers—**without** running a full
+DeepStream / GStreamer pipeline.
+
+The key design principle: **the parser lives in a separate `.so`** that you
+build yourself (or get from a third party).  The tester loads it at runtime
+via `dlopen` / `dlsym` using a small config file—no recompilation of the
+tester required when you swap parsers.
 
 ## Features
 
@@ -11,7 +16,8 @@ full DeepStream / GStreamer pipeline.
 | **Zero DeepStream runtime** | Fake DeepStream structs replace the SDK headers |
 | **ONNX Runtime backend** | Load `.onnx` models, run FP32 inference |
 | **Tensor Adapter** | Converts `Ort::Value` output to `NvDsInferLayerInfo` |
-| **YOLO26-seg parser** | Reference parser reusable in real DeepStream |
+| **Dynamic parser loading** | Parser `.so` loaded via `dlopen`/`dlsym` at runtime |
+| **Config file** | `config/parser.conf` — set `.so` path and function name |
 | **OpenCV visualiser** | Bounding boxes + semi-transparent instance masks |
 | **JSON export** | Detection results in nlohmann/json format |
 | **Tensor dump** | `--dump-tensor`: save raw output `.bin` files |
@@ -43,8 +49,8 @@ Input image (JPEG / PNG)
    (TensorInfo → NvDsInferLayerInfo)
         │
         ▼
-   NvDsInferParseYolo26InstanceMask()
-   (output0 [1,300,38] + output1 [1,32,160,160])
+   dlopen(parser_so) + dlsym(parser_func)   ← config/parser.conf
+   (your custom parser .so)
         │
         ▼
    NvDsInferInstanceMaskInfo[]
@@ -64,19 +70,21 @@ Input image (JPEG / PNG)
 deepstream_parser_tester/
 ├── CMakeLists.txt
 ├── README.md
+├── config/
+│   └── parser.conf          ← Set parser_so and parser_func here
 ├── include/
 │   ├── fake_nvdsinfer.h     ← Fake DeepStream structs (no SDK needed)
 │   ├── ort_runner.h         ← ONNX Runtime wrapper
 │   ├── tensor_adapter.h     ← Tensor → NvDsInferLayerInfo adapter
 │   └── visualizer.h         ← OpenCV visualiser
 ├── src/
-│   ├── main.cpp             ← CLI entry point
+│   ├── main.cpp             ← CLI entry point (dlopen/dlsym dispatch)
 │   ├── ort_runner.cpp
 │   ├── tensor_adapter.cpp
 │   └── visualizer.cpp
 ├── parser/
-│   ├── yolo26_parser.h      ← Parser API (compatible with real DeepStream)
-│   └── yolo26_parser.cpp    ← NvDsInferParseYolo26InstanceMask implementation
+│   ├── yolo26_parser.h      ← Reference parser API
+│   └── yolo26_parser.cpp    ← Reference YOLO26-seg parser (built as .so)
 ├── tests/
 │   ├── test_parser.cpp      ← Standalone parser unit tests
 │   └── expected.json        ← Golden test fixture
@@ -125,6 +133,14 @@ cmake .. -DORT_ROOT=/path/to/onnxruntime
 make -j$(nproc)
 ```
 
+`make` produces:
+
+| Artifact | Description |
+|---|---|
+| `build/parser_tester` | The main CLI tool |
+| `build/libyolo26_parser.so` | Reference parser plugin (ready to use) |
+| `build/config/parser.conf` | Config file copied from `config/parser.conf` |
+
 ### Build with real DeepStream SDK headers (optional)
 
 ```bash
@@ -132,6 +148,64 @@ cmake .. -DHAVE_DEEPSTREAM=ON \
          -DORT_ROOT=/path/to/onnxruntime
 make -j$(nproc)
 ```
+
+---
+
+## Parser Config File
+
+Edit `build/config/parser.conf` (or `config/parser.conf`) before running:
+
+```ini
+# Path to your compiled parser shared library (.so)
+parser_so   = ./libyolo26_parser.so
+
+# C-linkage function name exported by the .so
+parser_func = NvDsInferParseYolo26InstanceMask
+```
+
+You can also override either value on the command line:
+
+```bash
+./parser_tester --image img.jpg --model model.onnx \
+    --parser-so   /path/to/my_parser.so \
+    --parser-func MyParserFunction
+```
+
+---
+
+## Writing Your Own Parser .so
+
+Your parser must export one C-linkage function with this exact signature:
+
+```cpp
+#include "fake_nvdsinfer.h"   // or the real nvdsinfer.h
+
+extern "C"
+bool MyParserFunction(
+    const std::vector<NvDsInferLayerInfo>&   outputLayersInfo,
+    const NvDsInferNetworkInfo&              networkInfo,
+    const NvDsInferParseDetectionParams&     detectionParams,
+    std::vector<NvDsInferInstanceMaskInfo>&  objectList);
+```
+
+Build it as a shared library:
+
+```bash
+g++ -std=c++11 -shared -fPIC \
+    -I /path/to/DeepStream-Custom-Parser-Tester/include \
+    -o my_parser.so \
+    my_parser.cpp
+```
+
+Then update `config/parser.conf`:
+
+```ini
+parser_so   = /absolute/path/to/my_parser.so
+parser_func = MyParserFunction
+```
+
+> **Tip:** The bundled `parser/yolo26_parser.cpp` is a complete working example
+> you can use as a starting point.
 
 ---
 
@@ -164,12 +238,24 @@ Failed: 0
 ### Basic usage
 
 ```bash
+cd build
+
+# Edit config/parser.conf first (or use --parser-so / --parser-func)
 ./parser_tester \
     --image  ../images/test.jpg \
     --model  ../models/yolo26_seg.onnx \
     --output ../output/result.jpg \
     --conf   0.3 \
     --classes person car bicycle
+```
+
+### Use a custom config file
+
+```bash
+./parser_tester \
+    --image  ../images/test.jpg \
+    --model  ../models/yolo26_seg.onnx \
+    --config /path/to/my_config.conf
 ```
 
 ### Save raw tensors and debug masks
@@ -238,7 +324,7 @@ Fields:
 
 ## Expected ONNX Model Output Format
 
-The parser expects two output tensors with the following layout:
+The bundled reference parser expects two output tensors:
 
 ### `output0`  `[1, num_dets, 38]`
 
@@ -261,16 +347,6 @@ mask[h, w] = sigmoid( Σ_k  coeff[k] * proto[k, h, w] )
 
 ---
 
-## Extending to Other Parsers
-
-1. Copy `parser/yolo26_parser.{h,cpp}` to e.g. `parser/yolo11_parser.{h,cpp}`.
-2. Implement `NvDsInferParseYolo11InstanceMask()` following the same signature.
-3. Add the new `.cpp` to the `yolo26_parser` library in `CMakeLists.txt`
-   (or create a separate library target).
-4. Call the new function from `main.cpp` (or add a `--parser` CLI flag).
-
----
-
 ## Adding a TensorRT Backend (Future Work)
 
 The framework is designed to accept any backend that produces `TensorInfo[]`
@@ -279,10 +355,7 @@ objects.  A future `TrtRunner` class would:
 1. Load a serialised engine with `nvinfer1::IRuntime`.
 2. Run inference and copy device memory to host.
 3. Populate `TensorInfo::data` exactly as `OrtRunner` does.
-4. Feed the same `TensorAdapter` → Parser pipeline.
-
-This lets you verify that both ONNX Runtime and TensorRT produce identical
-parser results before deploying to a live DeepStream pipeline.
+4. Feed the same `TensorAdapter` → Parser (via dlopen) pipeline.
 
 ---
 

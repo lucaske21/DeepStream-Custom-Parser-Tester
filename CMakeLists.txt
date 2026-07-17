@@ -91,7 +91,11 @@ include_directories(
     ${OpenCV_INCLUDE_DIRS})
 
 # ---------------------------------------------------------------------------
-# Parser static library
+# Parser shared library  (.so)
+#
+# Users write their own parser, build it as a .so (see README), and point
+# config/parser.conf at it.  This target builds the bundled reference parser
+# as a .so so users have a working example immediately after `make`.
 #
 # Compiled with HAVE_DEEPSTREAM undefined → picks up fake_nvdsinfer.h.
 # To compile against the real DeepStream SDK, pass:
@@ -99,12 +103,17 @@ include_directories(
 # ---------------------------------------------------------------------------
 option(HAVE_DEEPSTREAM "Link against the real DeepStream SDK headers" OFF)
 
-add_library(yolo26_parser STATIC
+add_library(yolo26_parser SHARED
     parser/yolo26_parser.cpp)
 
 target_include_directories(yolo26_parser PUBLIC
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/parser)
+
+# Ensure symbols have default visibility so dlsym() can find them (C linkage is provided by extern "C" in the source).
+set_target_properties(yolo26_parser PROPERTIES
+    CXX_VISIBILITY_PRESET default
+    VISIBILITY_INLINES_HIDDEN OFF)
 
 if(HAVE_DEEPSTREAM)
     target_compile_definitions(yolo26_parser PUBLIC HAVE_DEEPSTREAM)
@@ -115,6 +124,9 @@ endif()
 
 # ---------------------------------------------------------------------------
 # Main executable
+#
+# parser_tester does NOT link yolo26_parser statically; it discovers the parser
+# at runtime via dlopen/dlsym using the path from config/parser.conf.
 # ---------------------------------------------------------------------------
 add_executable(parser_tester
     src/main.cpp
@@ -124,7 +136,7 @@ add_executable(parser_tester
 
 target_link_libraries(parser_tester
     PRIVATE
-        yolo26_parser
+        ${CMAKE_DL_LIBS}
         ${ORT_LIB}
         ${OpenCV_LIBS}
         nlohmann_json::nlohmann_json)
@@ -134,11 +146,18 @@ if(HAVE_DEEPSTREAM)
 endif()
 
 # ---------------------------------------------------------------------------
-# Ensure the output directory exists at build time.
+# Ensure the output and config directories exist at build time.
+# Also copy config/parser.conf to the build directory so that parser_tester
+# can find it at its default path (config/parser.conf relative to cwd).
 # ---------------------------------------------------------------------------
 add_custom_command(TARGET parser_tester POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory
-        ${CMAKE_BINARY_DIR}/output)
+        ${CMAKE_BINARY_DIR}/output
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        ${CMAKE_BINARY_DIR}/config
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/config/parser.conf
+        ${CMAKE_BINARY_DIR}/config/parser.conf)
 
 # ---------------------------------------------------------------------------
 # Installation

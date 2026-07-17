@@ -8,23 +8,26 @@
  *   parser_tester --image <img.jpg> --model <model.onnx> [options]
  *
  * Options
- *   --image <path>           Input image (required).
- *   --model <path>           ONNX model file (required).
- *   --output <path>          Save annotated result image (default: output/result.jpg).
- *   --conf <float>           Confidence threshold (default: 0.25).
- *   --classes <names...>     Class names, space-separated (default: "object").
- *   --width <int>            Network input width  (default: 640).
- *   --height <int>           Network input height (default: 640).
- *   --dump-tensor            Save raw output tensors to output/output*.bin.
- *   --dump-mask              Save intermediate mask images to output/.
- *   --no-display             Skip cv::imshow() even when DISPLAY is available.
+ *   --image <path>            Input image (required).
+ *   --model <path>            ONNX model file (required).
+ *   --config <path>           Parser config file (default: config/parser.conf).
+ *   --parser-so <path>        Parser shared library (.so) – overrides config.
+ *   --parser-func <name>      C-linkage function name inside .so – overrides config.
+ *   --output <path>           Save annotated result image (default: output/result.jpg).
+ *   --conf <float>            Confidence threshold (default: 0.25).
+ *   --classes <names...>      Class names, space-separated (default: "object").
+ *   --width <int>             Network input width  (default: 640).
+ *   --height <int>            Network input height (default: 640).
+ *   --dump-tensor             Save raw output tensors to output/output*.bin.
+ *   --dump-mask               Save intermediate mask images to output/.
+ *   --no-display              Skip cv::imshow() even when DISPLAY is available.
  *   --compare <expected.json> Run golden regression test.
  *
  * Data flow
  * ---------
  *   Image → letterbox preprocess → OrtRunner → TensorInfo[]
  *       → TensorAdapter → NvDsInferLayerInfo[]
- *       → NvDsInferParseYolo26InstanceMask()
+ *       → parser .so (loaded via dlopen/dlsym)
  *       → NvDsInferInstanceMaskInfo[]
  *       → Visualizer → annotated image + JSON results
  */
@@ -39,15 +42,30 @@
 #include <cstring>
 #include <cmath>
 
+#include <dlfcn.h>
+
 #include <nlohmann/json.hpp>
 
 #include "fake_nvdsinfer.h"
 #include "ort_runner.h"
 #include "tensor_adapter.h"
 #include "visualizer.h"
-#include "yolo26_parser.h"
 
 using json = nlohmann::json;
+
+/* -------------------------------------------------------------------------- */
+/* Parser function type                                                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Function pointer type matching the DeepStream custom-parser C ABI.
+ * The .so must export the function with extern "C" linkage.
+ */
+typedef bool (*NvDsParserFunc)(
+    const std::vector<NvDsInferLayerInfo>&,
+    const NvDsInferNetworkInfo&,
+    const NvDsInferParseDetectionParams&,
+    std::vector<NvDsInferInstanceMaskInfo>&);
 
 /* -------------------------------------------------------------------------- */
 /* CLI helpers                                                                 */
@@ -56,17 +74,20 @@ using json = nlohmann::json;
 static void printUsage(const char* prog) {
     std::cout <<
         "Usage: " << prog << " --image <img.jpg> --model <model.onnx> [options]\n\n"
-        "  --image   <path>        Input image (required)\n"
-        "  --model   <path>        ONNX model (required)\n"
-        "  --output  <path>        Annotated output image (default: output/result.jpg)\n"
-        "  --conf    <float>       Confidence threshold (default: 0.25)\n"
-        "  --classes <n0 n1 ...>   Class names (default: \"object\")\n"
-        "  --width   <int>         Network input width  (default: 640)\n"
-        "  --height  <int>         Network input height (default: 640)\n"
-        "  --dump-tensor           Save raw output tensors\n"
-        "  --dump-mask             Save intermediate mask images\n"
-        "  --no-display            Skip imshow()\n"
-        "  --compare <expected.json>  Golden regression test\n";
+        "  --image       <path>        Input image (required)\n"
+        "  --model       <path>        ONNX model (required)\n"
+        "  --config      <path>        Parser config file (default: config/parser.conf)\n"
+        "  --parser-so   <path>        Parser .so path (overrides config)\n"
+        "  --parser-func <name>        Parser function name (overrides config)\n"
+        "  --output      <path>        Annotated output image (default: output/result.jpg)\n"
+        "  --conf        <float>       Confidence threshold (default: 0.25)\n"
+        "  --classes     <n0 n1 ...>   Class names (default: \"object\")\n"
+        "  --width       <int>         Network input width  (default: 640)\n"
+        "  --height      <int>         Network input height (default: 640)\n"
+        "  --dump-tensor               Save raw output tensors\n"
+        "  --dump-mask                 Save intermediate mask images\n"
+        "  --no-display                Skip imshow()\n"
+        "  --compare     <expected.json>  Golden regression test\n";
 }
 
 static bool getArg(const std::vector<std::string>& args,
@@ -89,7 +110,8 @@ static const char* const KNOWN_FLAGS[] = {
     "--image", "--model", "--output", "--conf",
     "--classes", "--width", "--height",
     "--dump-tensor", "--dump-mask", "--no-display",
-    "--compare", "--help", "-h", nullptr
+    "--compare", "--config", "--parser-so", "--parser-func",
+    "--help", "-h", nullptr
 };
 
 static bool isKnownFlag(const std::string& s) {
@@ -111,6 +133,47 @@ static std::vector<std::string> getClassNames(const std::vector<std::string>& ar
         }
     }
     return names;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Config file reader                                                          */
+/* -------------------------------------------------------------------------- */
+
+/** Trim leading and trailing whitespace from a string. */
+static std::string trimStr(const std::string& s) {
+    const size_t begin = s.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos) return "";
+    const size_t end = s.find_last_not_of(" \t\r\n");
+    return s.substr(begin, end - begin + 1);
+}
+
+struct ParserConfig {
+    std::string soPath;
+    std::string funcName;
+};
+
+/**
+ * Read a simple key = value config file.
+ * Lines starting with '#' or blank lines are ignored.
+ */
+static bool readParserConfig(const std::string& path, ParserConfig& cfg) {
+    std::ifstream f(path);
+    if (!f) {
+        std::cerr << "[config] Cannot open config file: " << path << "\n";
+        return false;
+    }
+    std::string line;
+    while (std::getline(f, line)) {
+        const std::string trimmed = trimStr(line);
+        if (trimmed.empty() || trimmed[0] == '#') continue;
+        const size_t eq = trimmed.find('=');
+        if (eq == std::string::npos) continue;
+        const std::string key = trimStr(trimmed.substr(0, eq));
+        const std::string val = trimStr(trimmed.substr(eq + 1));
+        if (key == "parser_so")   cfg.soPath   = val;
+        if (key == "parser_func") cfg.funcName = val;
+    }
+    return true;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -285,6 +348,7 @@ int main(int argc, char* argv[])
     /* ------------------------------------------------------------------ */
     std::string imagePath, modelPath, outputPath, comparePath;
     std::string confStr, widthStr, heightStr;
+    std::string configPath, parserSoCli, parserFuncCli;
     bool dumpTensor = hasFlag(args, "--dump-tensor");
     bool dumpMask   = hasFlag(args, "--dump-mask");
     bool noDisplay  = hasFlag(args, "--no-display");
@@ -296,13 +360,17 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    getArg(args, "--output",  outputPath);
-    getArg(args, "--compare", comparePath);
-    getArg(args, "--conf",    confStr);
-    getArg(args, "--width",   widthStr);
-    getArg(args, "--height",  heightStr);
+    getArg(args, "--output",      outputPath);
+    getArg(args, "--compare",     comparePath);
+    getArg(args, "--conf",        confStr);
+    getArg(args, "--width",       widthStr);
+    getArg(args, "--height",      heightStr);
+    getArg(args, "--config",      configPath);
+    getArg(args, "--parser-so",   parserSoCli);
+    getArg(args, "--parser-func", parserFuncCli);
 
     if (outputPath.empty()) outputPath = "output/result.jpg";
+    if (configPath.empty()) configPath = "config/parser.conf";
 
     /* Parse --conf with explicit error checking. */
     float confThresh = 0.25f;
@@ -343,6 +411,60 @@ int main(int argc, char* argv[])
     std::vector<std::string> classNames = getClassNames(args);
     if (classNames.empty()) classNames.push_back("object");
 
+    /* ------------------------------------------------------------------ */
+    /* Load parser config and resolve .so path + function name.             */
+    /* ------------------------------------------------------------------ */
+    ParserConfig parserCfg;
+    /* Read config file (errors are non-fatal if CLI overrides are given). */
+    if (!readParserConfig(configPath, parserCfg) &&
+        (parserSoCli.empty() || parserFuncCli.empty())) {
+        std::cerr << "Error: config file '" << configPath
+                  << "' could not be read and --parser-so / --parser-func "
+                     "are not both provided.\n";
+        return 1;
+    }
+    /* CLI flags take precedence over the config file. */
+    if (!parserSoCli.empty())   parserCfg.soPath   = parserSoCli;
+    if (!parserFuncCli.empty()) parserCfg.funcName = parserFuncCli;
+
+    if (parserCfg.soPath.empty()) {
+        std::cerr << "Error: parser_so is not set (check config or use --parser-so).\n";
+        return 1;
+    }
+    if (parserCfg.funcName.empty()) {
+        std::cerr << "Error: parser_func is not set (check config or use --parser-func).\n";
+        return 1;
+    }
+
+    std::cout << "\n[Config] Parser .so  : " << parserCfg.soPath   << "\n";
+    std::cout << "[Config] Parser func : " << parserCfg.funcName << "\n";
+
+    /* ------------------------------------------------------------------ */
+    /* Load parser .so via dlopen / dlsym.                                  */
+    /* ------------------------------------------------------------------ */
+    void* soHandle = dlopen(parserCfg.soPath.c_str(), RTLD_NOW);
+    if (!soHandle) {
+        std::cerr << "Error: dlopen('" << parserCfg.soPath
+                  << "') failed: " << dlerror() << "\n";
+        return 1;
+    }
+
+    /* Clear any previous error before calling dlsym. */
+    dlerror();
+    void* sym = dlsym(soHandle, parserCfg.funcName.c_str());
+    const char* dlErr = dlerror();
+    if (dlErr) {
+        std::cerr << "Error: dlsym('" << parserCfg.funcName
+                  << "') failed: " << dlErr << "\n";
+        dlclose(soHandle);
+        return 1;
+    }
+    /* POSIX specifies that dlsym() returns a pointer that can be cast to the
+     * correct function type on this platform. */
+    static_assert(sizeof(void*) == sizeof(NvDsParserFunc),
+                  "dlsym() pointer size does not match NvDsParserFunc");
+    NvDsParserFunc parserFunc = reinterpret_cast<NvDsParserFunc>(sym);
+
     const std::string outDir = "output";
 
     /* ------------------------------------------------------------------ */
@@ -352,7 +474,7 @@ int main(int argc, char* argv[])
     PreprocessInfo ppInfo;
     std::vector<float> inputData;
     cv::Mat origImage = preprocessImage(imagePath, netW, netH, ppInfo, inputData);
-    if (origImage.empty()) return 1;
+    if (origImage.empty()) { dlclose(soHandle); return 1; }
 
     std::cout << "  Original: " << origImage.cols << "x" << origImage.rows << "\n";
     std::cout << "  Scale=" << ppInfo.scale
@@ -363,14 +485,14 @@ int main(int argc, char* argv[])
     /* ------------------------------------------------------------------ */
     std::cout << "\n[Step 2] Running ONNX inference: " << modelPath << "\n";
     OrtRunner runner;
-    if (!runner.loadModel(modelPath)) return 1;
+    if (!runner.loadModel(modelPath)) { dlclose(soHandle); return 1; }
 
     std::vector<TensorInfo> tensors;
     const std::vector<int64_t> inputShape = {1, 3,
         static_cast<int64_t>(netH),
         static_cast<int64_t>(netW)};
 
-    if (!runner.run(inputData, inputShape, tensors)) return 1;
+    if (!runner.run(inputData, inputShape, tensors)) { dlclose(soHandle); return 1; }
 
     /* ------------------------------------------------------------------ */
     /* Step 3 – Optional tensor dump.                                       */
@@ -389,9 +511,10 @@ int main(int argc, char* argv[])
     TensorAdapter::adapt(tensors, layerInfos, nameStorage);
 
     /* ------------------------------------------------------------------ */
-    /* Step 5 – Call the custom parser.                                     */
+    /* Step 5 – Call the custom parser loaded from .so.                     */
     /* ------------------------------------------------------------------ */
-    std::cout << "\n[Step 5] Calling NvDsInferParseYolo26InstanceMask().\n";
+    std::cout << "\n[Step 5] Calling " << parserCfg.funcName
+              << "() from " << parserCfg.soPath << "\n";
 
     NvDsInferNetworkInfo netInfo;
     netInfo.width    = static_cast<unsigned int>(netW);
@@ -404,8 +527,9 @@ int main(int argc, char* argv[])
     detParams.perClassPostclusterThreshold.assign(classNames.size(), confThresh);
 
     std::vector<NvDsInferInstanceMaskInfo> detections;
-    if (!NvDsInferParseYolo26InstanceMask(layerInfos, netInfo, detParams, detections)) {
+    if (!parserFunc(layerInfos, netInfo, detParams, detections)) {
         std::cerr << "Parser returned false.\n";
+        dlclose(soHandle);
         return 1;
     }
 
@@ -447,6 +571,7 @@ int main(int argc, char* argv[])
         std::cout << "\n[Step 8] Running golden regression test.\n";
         const bool pass = runGoldenTest(comparePath, detections);
         freeMasks(detections);
+        dlclose(soHandle);
         return pass ? 0 : 2;
     }
 
@@ -454,6 +579,7 @@ int main(int argc, char* argv[])
     /* Clean up parser-allocated mask buffers.                              */
     /* ------------------------------------------------------------------ */
     freeMasks(detections);
+    dlclose(soHandle);
 
     std::cout << "\nDone.\n";
     return 0;
