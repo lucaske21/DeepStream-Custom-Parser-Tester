@@ -100,6 +100,7 @@ cv::Mat Visualizer::visualize(
         /* Draw bounding box.                                                */
         /* ---------------------------------------------------------------- */
         cv::rectangle(result, bboxRect, color, 2);
+        cv::rectangle(overlay, bboxRect, color, 2);
 
         /* ---------------------------------------------------------------- */
         /* Draw label: "<ClassName> <conf>".                                 */
