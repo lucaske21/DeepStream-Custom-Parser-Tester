@@ -89,8 +89,8 @@ cv::Mat Visualizer::visualize(
 
         const int bx1 = std::max(0, static_cast<int>(x1Orig));
         const int by1 = std::max(0, static_cast<int>(y1Orig));
-        const int bx2 = std::min(result.cols - 1, static_cast<int>(x2Orig));
-        const int by2 = std::min(result.rows - 1, static_cast<int>(y2Orig));
+        const int bx2 = std::min(result.cols, static_cast<int>(x2Orig));
+        const int by2 = std::min(result.rows, static_cast<int>(y2Orig));
 
         if (bx2 <= bx1 || by2 <= by1) continue;
 
