@@ -37,8 +37,8 @@ static const cv::Scalar CLASS_COLORS[] = {
 };
 static const int NUM_COLORS = 6;
 
-static inline cv::Scalar classColor(int classId) {
-    return CLASS_COLORS[static_cast<unsigned int>(classId) % NUM_COLORS];
+static inline cv::Scalar classColor(unsigned int classId) {
+    return CLASS_COLORS[classId % NUM_COLORS];
 }
 
 /* Format a float as a string with @p decimals places. */
@@ -105,9 +105,10 @@ cv::Mat Visualizer::visualize(
         /* ---------------------------------------------------------------- */
         /* Draw label: "<ClassName> <conf>".                                 */
         /* ---------------------------------------------------------------- */
+        const size_t classIdx = static_cast<size_t>(obj.classId);
         std::string className =
-            (static_cast<size_t>(obj.classId) < classNames.size())
-                ? classNames[obj.classId]
+            (classIdx < classNames.size())
+                ? classNames[classIdx]
                 : ("cls" + std::to_string(obj.classId));
         const std::string label = className + " " + fmtFloat(obj.detectionConfidence);
 
@@ -136,10 +137,10 @@ cv::Mat Visualizer::visualize(
         /* ---------------------------------------------------------------- */
         /* Instance mask overlay.                                            */
         /* ---------------------------------------------------------------- */
-        if (!obj.mask || obj.mask_width <= 0 || obj.mask_height <= 0) continue;
+        if (!obj.mask || obj.mask_width == 0 || obj.mask_height == 0) continue;
 
-        const int protoW = obj.mask_width;
-        const int protoH = obj.mask_height;
+        const int protoW = static_cast<int>(obj.mask_width);
+        const int protoH = static_cast<int>(obj.mask_height);
 
         /* Crop the full prototype-space mask to the bbox region.           */
         /* Prototype coords = network coords * (proto / net).               */
