@@ -16,7 +16,22 @@
 #if defined(USE_DEEPSTREAM_NVDSINFER)
 
 #include <nvdsinfer.h>
-#include <nvdsinfer_custom_impl.h>
+
+#include <vector>
+
+/*
+ * NvDsInferParseDetectionParams is declared by DeepStream's
+ * nvdsinfer_custom_impl.h, but that header also includes TensorRT headers,
+ * which in turn require CUDA headers. The tester only needs this lightweight
+ * parser-ABI parameter object, so keep the definition local while using the
+ * real DeepStream nvdsinfer.h for NvDsInferLayerInfo and
+ * NvDsInferInstanceMaskInfo layout compatibility.
+ */
+typedef struct {
+    unsigned int         numClassesConfigured;
+    std::vector<float>   perClassPreclusterThreshold;
+    std::vector<float>   perClassPostclusterThreshold;
+} NvDsInferParseDetectionParams;
 
 #else
 
