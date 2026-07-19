@@ -13,6 +13,12 @@
 #ifndef FAKE_NVDSINFER_H
 #define FAKE_NVDSINFER_H
 
+#if defined(USE_DEEPSTREAM_NVDSINFER)
+
+#include <nvdsinfer.h>
+
+#else
+
 #include <vector>
 #include <cstring>
 
@@ -79,16 +85,18 @@ typedef struct {
  * The caller is responsible for freeing it (delete[] mask).
  */
 typedef struct {
+    unsigned int classId;
     float        left;
     float        top;
     float        width;
     float        height;
     float        detectionConfidence;
-    int          classId;
     float       *mask;
-    int          mask_width;
-    int          mask_height;
-    int          mask_size;   /* size in bytes = mask_width * mask_height * sizeof(float) */
+    unsigned int mask_width;
+    unsigned int mask_height;
+    unsigned int mask_size;   /* size in bytes = mask_width * mask_height * sizeof(float) */
 } NvDsInferInstanceMaskInfo;
+
+#endif /* USE_DEEPSTREAM_NVDSINFER */
 
 #endif /* FAKE_NVDSINFER_H */
