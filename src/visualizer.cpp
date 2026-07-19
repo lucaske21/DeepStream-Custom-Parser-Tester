@@ -1,7 +1,7 @@
 /**
  * visualizer.cpp
  *
- * OpenCV-based visualization of YOLO-seg instance segmentation results.
+ * OpenCV-based visualization of DeepStream instance segmentation results.
  *
  * Coordinate mapping
  * ------------------
@@ -11,17 +11,16 @@
  *
  * Mask assembly
  * -------------
- * The parser stores a full-prototype-space mask (e.g. 160×160) in
- * NvDsInferInstanceMaskInfo::mask.  This function:
- *   1. Crops the mask to the bbox region (scaled to prototype space).
- *   2. Resizes the crop to the original-image-space bbox size.
- *   3. Thresholds at 0.5 to produce a binary mask.
- *   4. Blends a colour overlay onto the image.
+ * NvDsInferInstanceMaskInfo::mask is a per-object mask. Its dimensions are
+ * NvDsInferInstanceMaskInfo::mask_width and mask_height, and it corresponds to
+ * the object's bounding box, not the full network/prototype image. This file
+ * resizes that object mask to the bbox in original-image space and blends it.
  */
 
 #include "visualizer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <sstream>
 #include <iomanip>
@@ -64,8 +63,7 @@ cv::Mat Visualizer::visualize(
         return result;
     }
 
-    /* Scale factors: prototype space → network space → original image space.   */
-    /* netInfo.width / netInfo.height are used below for per-object sx, sy.    */
+    (void)netInfo;
 
     /* We accumulate mask overlays into a separate Mat, then blend once. */
     cv::Mat overlay = result.clone();
@@ -87,10 +85,15 @@ cv::Mat Visualizer::visualize(
         const float x2Orig = (x2Net - ppInfo.padX) / ppInfo.scale;
         const float y2Orig = (y2Net - ppInfo.padY) / ppInfo.scale;
 
-        const int bx1 = std::max(0, static_cast<int>(x1Orig));
-        const int by1 = std::max(0, static_cast<int>(y1Orig));
-        const int bx2 = std::min(result.cols, static_cast<int>(x2Orig));
-        const int by2 = std::min(result.rows, static_cast<int>(y2Orig));
+        const int fullBx1 = static_cast<int>(std::floor(x1Orig));
+        const int fullBy1 = static_cast<int>(std::floor(y1Orig));
+        const int fullBx2 = static_cast<int>(std::ceil(x2Orig));
+        const int fullBy2 = static_cast<int>(std::ceil(y2Orig));
+
+        const int bx1 = std::max(0, fullBx1);
+        const int by1 = std::max(0, fullBy1);
+        const int bx2 = std::min(result.cols, fullBx2);
+        const int by2 = std::min(result.rows, fullBy2);
 
         if (bx2 <= bx1 || by2 <= by1) continue;
 
@@ -139,30 +142,19 @@ cv::Mat Visualizer::visualize(
         /* ---------------------------------------------------------------- */
         if (!obj.mask || obj.mask_width == 0 || obj.mask_height == 0) continue;
 
-        const int protoW = static_cast<int>(obj.mask_width);
-        const int protoH = static_cast<int>(obj.mask_height);
+        const int maskW = static_cast<int>(obj.mask_width);
+        const int maskH = static_cast<int>(obj.mask_height);
 
-        /* Crop the full prototype-space mask to the bbox region.           */
-        /* Prototype coords = network coords * (proto / net).               */
-        const float sx = static_cast<float>(protoW) / netInfo.width;
-        const float sy = static_cast<float>(protoH) / netInfo.height;
+        const int fullBoxW = fullBx2 - fullBx1;
+        const int fullBoxH = fullBy2 - fullBy1;
+        if (fullBoxW <= 0 || fullBoxH <= 0) continue;
 
-        const int px1 = std::max(0, static_cast<int>(x1Net * sx));
-        const int py1 = std::max(0, static_cast<int>(y1Net * sy));
-        const int px2 = std::min(protoW, static_cast<int>(x2Net * sx));
-        const int py2 = std::min(protoH, static_cast<int>(y2Net * sy));
-
-        if (px2 <= px1 || py2 <= py1) continue;
-
-        /* Build OpenCV Mat that wraps the parser-allocated buffer (no copy). */
-        cv::Mat fullMask(protoH, protoW, CV_32F, obj.mask);
-
-        /* Crop to bbox region in prototype space. */
-        cv::Mat croppedMask = fullMask(cv::Rect(px1, py1, px2 - px1, py2 - py1)).clone();
+        /* Build OpenCV Mat that wraps the parser-allocated per-object mask. */
+        cv::Mat objectMask(maskH, maskW, CV_32F, obj.mask);
 
         if (dumpMask) {
             cv::Mat dbg;
-            croppedMask.convertTo(dbg, CV_8U, 255.0f);
+            objectMask.convertTo(dbg, CV_8U, 255.0f);
             const std::string path =
                 maskDumpDir + "/mask_raw_" + std::to_string(idx) + ".png";
             if (cv::imwrite(path, dbg))
@@ -171,10 +163,10 @@ cv::Mat Visualizer::visualize(
                 std::cerr << "[Visualizer] Failed to save " << path << "\n";
         }
 
-        /* Resize crop to original-image-space bbox size. */
+        /* Resize the object mask to the full, unclipped original-image bbox. */
         cv::Mat resizedMask;
-        cv::resize(croppedMask, resizedMask,
-                   cv::Size(bboxRect.width, bboxRect.height),
+        cv::resize(objectMask, resizedMask,
+                   cv::Size(fullBoxW, fullBoxH),
                    0, 0, cv::INTER_LINEAR);
 
         if (dumpMask) {
@@ -193,10 +185,16 @@ cv::Mat Visualizer::visualize(
         cv::threshold(resizedMask, binaryMask, 0.5f, 255.0f, cv::THRESH_BINARY);
         binaryMask.convertTo(binaryMask, CV_8U);
 
+        const int maskX = bx1 - fullBx1;
+        const int maskY = by1 - fullBy1;
+        cv::Mat visibleMask = binaryMask(cv::Rect(maskX, maskY,
+                                                  bboxRect.width,
+                                                  bboxRect.height));
+
         if (dumpMask) {
             const std::string path =
                 maskDumpDir + "/mask_final_" + std::to_string(idx) + ".png";
-            if (cv::imwrite(path, binaryMask))
+            if (cv::imwrite(path, visibleMask))
                 std::cout << "[Visualizer] Saved " << path << "\n";
             else
                 std::cerr << "[Visualizer] Failed to save " << path << "\n";
@@ -205,7 +203,7 @@ cv::Mat Visualizer::visualize(
         /* Paint the colour overlay onto the overlay Mat inside the bbox. */
         cv::Mat roi = overlay(bboxRect);
         cv::Mat colorLayer(bboxRect.height, bboxRect.width, CV_8UC3, color);
-        colorLayer.copyTo(roi, binaryMask);
+        colorLayer.copyTo(roi, visibleMask);
     }
 
     /* Blend overlay (40 % opacity) into the result. */

@@ -32,7 +32,7 @@ public:
      * @param image       Original BGR image (any size).
      * @param objects     Detections from the parser.
      * @param classNames  Human-readable class name for each class ID.
-     * @param netInfo     Network input dimensions (used for prototype scaling).
+    * @param netInfo     Network input dimensions (kept for call-site symmetry).
      * @param ppInfo      Pre-processing metadata for coordinate inverse-mapping.
      * @param dumpMask    When true, intermediate mask images are saved to disk.
      * @param maskDumpDir Directory where mask debug images are written.
