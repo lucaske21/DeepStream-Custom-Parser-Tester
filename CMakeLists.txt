@@ -37,6 +37,13 @@ if(USE_DEEPSTREAM_NVDSINFER)
               /opt/nvidia/deepstream/deepstream/sources/includes
               /opt/nvidia/deepstream/deepstream/include)
 
+    find_path(DEEPSTREAM_CUSTOM_IMPL_INCLUDE_DIR
+        NAMES nvdsinfer_custom_impl.h
+        HINTS ${DEEPSTREAM_INCLUDE_DIR}
+              ${DEEPSTREAM_NVDSINFER_INCLUDE_DIR}
+              /opt/nvidia/deepstream/deepstream/sources/includes
+              /opt/nvidia/deepstream/deepstream/include)
+
     if(NOT DEEPSTREAM_NVDSINFER_INCLUDE_DIR)
         message(FATAL_ERROR
             "DeepStream nvdsinfer.h not found.\n"
@@ -44,7 +51,15 @@ if(USE_DEEPSTREAM_NVDSINFER)
             "or disable -DUSE_DEEPSTREAM_NVDSINFER=OFF.")
     endif()
 
+    if(NOT DEEPSTREAM_CUSTOM_IMPL_INCLUDE_DIR)
+        message(FATAL_ERROR
+            "DeepStream nvdsinfer_custom_impl.h not found.\n"
+            "Set -DDEEPSTREAM_INCLUDE_DIR=/path/to/deepstream/sources/includes "
+            "or disable -DUSE_DEEPSTREAM_NVDSINFER=OFF.")
+    endif()
+
     message(STATUS "Using DeepStream nvdsinfer.h from: ${DEEPSTREAM_NVDSINFER_INCLUDE_DIR}")
+    message(STATUS "Using DeepStream nvdsinfer_custom_impl.h from: ${DEEPSTREAM_CUSTOM_IMPL_INCLUDE_DIR}")
 else()
     message(STATUS "Using local fake_nvdsinfer.h")
 endif()
@@ -119,6 +134,7 @@ FetchContent_MakeAvailable(nlohmann_json)
 # ---------------------------------------------------------------------------
 include_directories(
     ${DEEPSTREAM_NVDSINFER_INCLUDE_DIR}
+    ${DEEPSTREAM_CUSTOM_IMPL_INCLUDE_DIR}
     ${CMAKE_SOURCE_DIR}/include
     ${ORT_INCLUDE_DIR}
     ${OpenCV_INCLUDE_DIRS})

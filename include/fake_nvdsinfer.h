@@ -16,6 +16,7 @@
 #if defined(USE_DEEPSTREAM_NVDSINFER)
 
 #include <nvdsinfer.h>
+#include <nvdsinfer_custom_impl.h>
 
 #else
 
