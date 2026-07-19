@@ -17,6 +17,39 @@ endif()
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
 # ---------------------------------------------------------------------------
+# DeepStream NvDsInfer headers
+#
+# Enable this when parser_tester must load a parser .so built against the real
+# DeepStream SDK headers. The tester and parser .so must agree on these struct
+# layouts because the parser ABI passes NvDsInfer C++ structs and std::vector.
+# Example:
+#   cmake .. -DUSE_DEEPSTREAM_NVDSINFER=ON \
+#            -DDEEPSTREAM_INCLUDE_DIR=/opt/nvidia/deepstream/deepstream/sources/includes
+# ---------------------------------------------------------------------------
+option(USE_DEEPSTREAM_NVDSINFER
+    "Use DeepStream SDK nvdsinfer.h instead of the local fake header" OFF)
+set(DEEPSTREAM_INCLUDE_DIR "" CACHE PATH "Directory containing DeepStream nvdsinfer.h")
+
+if(USE_DEEPSTREAM_NVDSINFER)
+    find_path(DEEPSTREAM_NVDSINFER_INCLUDE_DIR
+        NAMES nvdsinfer.h
+        HINTS ${DEEPSTREAM_INCLUDE_DIR}
+              /opt/nvidia/deepstream/deepstream/sources/includes
+              /opt/nvidia/deepstream/deepstream/include)
+
+    if(NOT DEEPSTREAM_NVDSINFER_INCLUDE_DIR)
+        message(FATAL_ERROR
+            "DeepStream nvdsinfer.h not found.\n"
+            "Set -DDEEPSTREAM_INCLUDE_DIR=/path/to/deepstream/sources/includes "
+            "or disable -DUSE_DEEPSTREAM_NVDSINFER=OFF.")
+    endif()
+
+    message(STATUS "Using DeepStream nvdsinfer.h from: ${DEEPSTREAM_NVDSINFER_INCLUDE_DIR}")
+else()
+    message(STATUS "Using local fake_nvdsinfer.h")
+endif()
+
+# ---------------------------------------------------------------------------
 # OpenCV
 # ---------------------------------------------------------------------------
 find_package(OpenCV REQUIRED)
@@ -85,6 +118,7 @@ FetchContent_MakeAvailable(nlohmann_json)
 # Include directories
 # ---------------------------------------------------------------------------
 include_directories(
+    ${DEEPSTREAM_NVDSINFER_INCLUDE_DIR}
     ${CMAKE_SOURCE_DIR}/include
     ${ORT_INCLUDE_DIR}
     ${OpenCV_INCLUDE_DIRS})
@@ -99,6 +133,10 @@ add_executable(parser_tester
     src/ort_runner.cpp
     src/tensor_adapter.cpp
     src/visualizer.cpp)
+
+if(USE_DEEPSTREAM_NVDSINFER)
+    target_compile_definitions(parser_tester PRIVATE USE_DEEPSTREAM_NVDSINFER=1)
+endif()
 
 target_link_libraries(parser_tester
     PRIVATE
