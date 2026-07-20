@@ -183,6 +183,7 @@ cd build
      --parser-func MyParserFunc \
     --output ../output/result.jpg \
     --conf   0.3 \
+     --num-classes 80 \
     --classes person car bicycle
 ```
 

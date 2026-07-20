@@ -14,6 +14,7 @@
  *   --parser-func <name>      C-linkage function name inside .so (required).
  *   --output <path>           Save annotated result image (default: output/result.jpg).
  *   --conf <float>            Confidence threshold (default: 0.25).
+ *   --num-classes <int>       Number of model classes for parser thresholds.
  *   --classes <names...>      Class names, space-separated (default: "object").
  *   --width <int>             Network input width  (default: 640).
  *   --height <int>            Network input height (default: 640).
@@ -79,6 +80,7 @@ static void printUsage(const char* prog) {
         "  --parser-func <name>        Parser function name (required)\n"
         "  --output      <path>        Annotated output image (default: output/result.jpg)\n"
         "  --conf        <float>       Confidence threshold (default: 0.25)\n"
+        "  --num-classes <int>         Number of model classes for parser thresholds\n"
         "  --classes     <n0 n1 ...>   Class names (default: \"object\")\n"
         "  --width       <int>         Network input width  (default: 640)\n"
         "  --height      <int>         Network input height (default: 640)\n"
@@ -106,7 +108,7 @@ static bool hasFlag(const std::vector<std::string>& args, const std::string& fla
 /* Known CLI flags – used to detect the end of a --classes list. */
 static const char* const KNOWN_FLAGS[] = {
     "--image", "--model", "--output", "--conf",
-    "--classes", "--width", "--height",
+    "--num-classes", "--classes", "--width", "--height",
     "--dump-tensor", "--dump-mask", "--no-display",
     "--compare", "--parser-so", "--parser-func",
     "--help", "-h", nullptr
@@ -304,7 +306,7 @@ int main(int argc, char* argv[])
     /* Parse CLI arguments.                                                 */
     /* ------------------------------------------------------------------ */
     std::string imagePath, modelPath, outputPath, comparePath;
-    std::string confStr, widthStr, heightStr;
+    std::string confStr, numClassesStr, widthStr, heightStr;
     std::string parserSoPath, parserFuncName;
     bool dumpTensor = hasFlag(args, "--dump-tensor");
     bool dumpMask   = hasFlag(args, "--dump-mask");
@@ -320,6 +322,7 @@ int main(int argc, char* argv[])
     getArg(args, "--output",      outputPath);
     getArg(args, "--compare",     comparePath);
     getArg(args, "--conf",        confStr);
+    getArg(args, "--num-classes", numClassesStr);
     getArg(args, "--width",       widthStr);
     getArg(args, "--height",      heightStr);
     getArg(args, "--parser-so",   parserSoPath);
@@ -366,6 +369,23 @@ int main(int argc, char* argv[])
     std::vector<std::string> classNames = getClassNames(args);
     if (classNames.empty()) classNames.push_back("object");
 
+    unsigned int numClasses = static_cast<unsigned int>(classNames.size());
+    if (!numClassesStr.empty()) {
+        char* endPtr = nullptr;
+        const long parsed = std::strtol(numClassesStr.c_str(), &endPtr, 10);
+        if (endPtr == numClassesStr.c_str() || *endPtr != '\0' || parsed <= 0) {
+            std::cerr << "Error: --num-classes must be a positive integer, got: "
+                      << numClassesStr << "\n";
+            return 1;
+        }
+        numClasses = static_cast<unsigned int>(parsed);
+    }
+    if (classNames.size() > numClasses) {
+        std::cerr << "Error: --classes contains " << classNames.size()
+                  << " names but --num-classes is " << numClasses << "\n";
+        return 1;
+    }
+
     if (parserSoPath.empty() || parserFuncName.empty()) {
         std::cerr << "Error: --parser-so and --parser-func are required.\n";
         return 1;
@@ -373,6 +393,7 @@ int main(int argc, char* argv[])
 
     std::cout << "\n[Config] Parser .so  : " << parserSoPath << "\n";
     std::cout << "[Config] Parser func : " << parserFuncName << "\n";
+    std::cout << "[Config] Num classes : " << numClasses << "\n";
 
     /* ------------------------------------------------------------------ */
     /* Load parser .so via dlopen / dlsym.                                  */
@@ -457,9 +478,9 @@ int main(int argc, char* argv[])
     netInfo.channels = 3;
 
     NvDsInferParseDetectionParams detParams;
-    detParams.numClassesConfigured = static_cast<unsigned int>(classNames.size());
-    detParams.perClassPreclusterThreshold.assign(classNames.size(), confThresh);
-    detParams.perClassPostclusterThreshold.assign(classNames.size(), confThresh);
+    detParams.numClassesConfigured = numClasses;
+    detParams.perClassPreclusterThreshold.assign(numClasses, confThresh);
+    detParams.perClassPostclusterThreshold.assign(numClasses, confThresh);
 
     std::vector<NvDsInferInstanceMaskInfo> detections;
     if (!parserFunc(layerInfos, netInfo, detParams, detections)) {
