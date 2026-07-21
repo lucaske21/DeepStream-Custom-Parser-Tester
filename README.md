@@ -22,6 +22,7 @@ tester required when you swap parsers.
 | **Tensor dump** | `--dump-tensor`: save raw output `.bin` files |
 | **Mask debug** | `--dump-mask`: save raw / resized / binary mask PNGs |
 | **Golden regression** | `--compare expected.json`: IoU + confidence check |
+| **Parser performance probe** | `--perf` / `--perf-iters`: parser-only latency and FPS |
 
 ---
 
@@ -224,6 +225,34 @@ output/mask_final_0.png    ← binary mask
 ```
 
 Returns exit code `0` on pass, `2` on fail.
+
+### Custom parser performance probe
+
+Use `--perf` to time the custom parser call after ONNX inference and tensor
+adaptation have already completed. Use `--perf-iters` for repeated parser-only
+measurements on the same tensors:
+
+```bash
+./parser_tester \
+          --image   ../images/test.jpg \
+          --model   ../models/yolo26_seg.onnx \
+          --parser-so ./libmy_parser.so \
+          --parser-func MyParserFunc \
+          --perf-iters 100 \
+          --no-display
+```
+
+The probe reports total, average, min/max, P50/P95 latency, and parser FPS:
+
+```text
+[Perf] Custom parser only
+     Iterations : 100
+     Total      : 38.512 ms
+     Avg        : 0.385 ms
+     Min / Max  : 0.361 / 0.522 ms
+     P50 / P95  : 0.378 / 0.430 ms
+     Parser FPS : 2596.573
+```
 
 ---
 

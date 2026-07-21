@@ -22,6 +22,8 @@
  *   --dump-mask               Save intermediate mask images to output/.
  *   --no-display              Skip cv::imshow() even when DISPLAY is available.
  *   --compare <expected.json> Run golden regression test.
+ *   --perf                    Print custom parser timing metrics.
+ *   --perf-iters <int>        Parser-only iterations for performance probe.
  *
  * Data flow
  * ---------
@@ -41,6 +43,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
+#include <chrono>
+#include <iomanip>
+#include <numeric>
+#include <utility>
 
 #include <dlfcn.h>
 
@@ -87,7 +93,9 @@ static void printUsage(const char* prog) {
         "  --dump-tensor               Save raw output tensors\n"
         "  --dump-mask                 Save intermediate mask images\n"
         "  --no-display                Skip imshow()\n"
-        "  --compare     <expected.json>  Golden regression test\n";
+        "  --compare     <expected.json>  Golden regression test\n"
+        "  --perf                     Print custom parser timing metrics\n"
+        "  --perf-iters  <int>         Parser-only iterations for performance probe\n";
 }
 
 static bool getArg(const std::vector<std::string>& args,
@@ -111,6 +119,7 @@ static const char* const KNOWN_FLAGS[] = {
     "--num-classes", "--classes", "--width", "--height",
     "--dump-tensor", "--dump-mask", "--no-display",
     "--compare", "--parser-so", "--parser-func",
+    "--perf", "--perf-iters",
     "--help", "-h", nullptr
 };
 
@@ -289,6 +298,58 @@ static void freeMasks(std::vector<NvDsInferInstanceMaskInfo>& objs) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Parser performance probe                                                    */
+/* -------------------------------------------------------------------------- */
+
+struct ParserPerfStats {
+    int iterations = 0;
+    double totalMs = 0.0;
+    double avgMs = 0.0;
+    double minMs = 0.0;
+    double maxMs = 0.0;
+    double p50Ms = 0.0;
+    double p95Ms = 0.0;
+    double fps = 0.0;
+};
+
+static double percentile(std::vector<double> sortedValues, double percentileValue) {
+    if (sortedValues.empty()) return 0.0;
+    std::sort(sortedValues.begin(), sortedValues.end());
+    const double rank = (percentileValue / 100.0) * static_cast<double>(sortedValues.size() - 1);
+    const size_t lower = static_cast<size_t>(std::floor(rank));
+    const size_t upper = static_cast<size_t>(std::ceil(rank));
+    const double fraction = rank - static_cast<double>(lower);
+    return sortedValues[lower] + (sortedValues[upper] - sortedValues[lower]) * fraction;
+}
+
+static ParserPerfStats summarizeParserPerf(const std::vector<double>& elapsedMs) {
+    ParserPerfStats stats;
+    stats.iterations = static_cast<int>(elapsedMs.size());
+    if (elapsedMs.empty()) return stats;
+
+    stats.totalMs = std::accumulate(elapsedMs.begin(), elapsedMs.end(), 0.0);
+    stats.avgMs = stats.totalMs / static_cast<double>(elapsedMs.size());
+    stats.minMs = *std::min_element(elapsedMs.begin(), elapsedMs.end());
+    stats.maxMs = *std::max_element(elapsedMs.begin(), elapsedMs.end());
+    stats.p50Ms = percentile(elapsedMs, 50.0);
+    stats.p95Ms = percentile(elapsedMs, 95.0);
+    stats.fps = (stats.avgMs > 0.0) ? 1000.0 / stats.avgMs : 0.0;
+    return stats;
+}
+
+static void printParserPerfStats(const ParserPerfStats& stats) {
+    std::cout << std::fixed << std::setprecision(3)
+              << "\n[Perf] Custom parser only\n"
+              << "  Iterations : " << stats.iterations << "\n"
+              << "  Total      : " << stats.totalMs << " ms\n"
+              << "  Avg        : " << stats.avgMs << " ms\n"
+              << "  Min / Max  : " << stats.minMs << " / " << stats.maxMs << " ms\n"
+              << "  P50 / P95  : " << stats.p50Ms << " / " << stats.p95Ms << " ms\n"
+              << "  Parser FPS : " << stats.fps << "\n"
+              << std::defaultfloat;
+}
+
+/* -------------------------------------------------------------------------- */
 /* main                                                                        */
 /* -------------------------------------------------------------------------- */
 
@@ -306,11 +367,12 @@ int main(int argc, char* argv[])
     /* Parse CLI arguments.                                                 */
     /* ------------------------------------------------------------------ */
     std::string imagePath, modelPath, outputPath, comparePath;
-    std::string confStr, numClassesStr, widthStr, heightStr;
+    std::string confStr, numClassesStr, widthStr, heightStr, perfItersStr;
     std::string parserSoPath, parserFuncName;
     bool dumpTensor = hasFlag(args, "--dump-tensor");
     bool dumpMask   = hasFlag(args, "--dump-mask");
     bool noDisplay  = hasFlag(args, "--no-display");
+    bool perfProbe  = hasFlag(args, "--perf");
 
     if (!getArg(args, "--image",   imagePath)  ||
         !getArg(args, "--model",   modelPath)) {
@@ -327,6 +389,7 @@ int main(int argc, char* argv[])
     getArg(args, "--height",      heightStr);
     getArg(args, "--parser-so",   parserSoPath);
     getArg(args, "--parser-func", parserFuncName);
+    getArg(args, "--perf-iters",  perfItersStr);
 
     if (outputPath.empty()) outputPath = "output/result.jpg";
 
@@ -386,6 +449,19 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    int perfIterations = perfProbe ? 1 : 0;
+    if (!perfItersStr.empty()) {
+        char* endPtr = nullptr;
+        const long parsed = std::strtol(perfItersStr.c_str(), &endPtr, 10);
+        if (endPtr == perfItersStr.c_str() || *endPtr != '\0' || parsed <= 0) {
+            std::cerr << "Error: --perf-iters must be a positive integer, got: "
+                      << perfItersStr << "\n";
+            return 1;
+        }
+        perfIterations = static_cast<int>(parsed);
+        perfProbe = true;
+    }
+
     if (parserSoPath.empty() || parserFuncName.empty()) {
         std::cerr << "Error: --parser-so and --parser-func are required.\n";
         return 1;
@@ -394,6 +470,9 @@ int main(int argc, char* argv[])
     std::cout << "\n[Config] Parser .so  : " << parserSoPath << "\n";
     std::cout << "[Config] Parser func : " << parserFuncName << "\n";
     std::cout << "[Config] Num classes : " << numClasses << "\n";
+    if (perfProbe) {
+        std::cout << "[Config] Perf probe  : " << perfIterations << " parser iteration(s)\n";
+    }
 
     /* ------------------------------------------------------------------ */
     /* Load parser .so via dlopen / dlsym.                                  */
@@ -483,7 +562,31 @@ int main(int argc, char* argv[])
     detParams.perClassPostclusterThreshold.assign(numClasses, confThresh);
 
     std::vector<NvDsInferInstanceMaskInfo> detections;
-    if (!parserFunc(layerInfos, netInfo, detParams, detections)) {
+    if (perfProbe) {
+        std::vector<double> elapsedMs;
+        elapsedMs.reserve(static_cast<size_t>(perfIterations));
+
+        for (int i = 0; i < perfIterations; ++i) {
+            std::vector<NvDsInferInstanceMaskInfo> iterationDetections;
+            const auto start = std::chrono::steady_clock::now();
+            const bool ok = parserFunc(layerInfos, netInfo, detParams, iterationDetections);
+            const auto finish = std::chrono::steady_clock::now();
+            elapsedMs.push_back(std::chrono::duration<double, std::milli>(finish - start).count());
+
+            if (!ok) {
+                freeMasks(iterationDetections);
+                std::cerr << "Parser returned false during performance probe iteration "
+                          << (i + 1) << ".\n";
+                dlclose(soHandle);
+                return 1;
+            }
+
+            freeMasks(detections);
+            detections = std::move(iterationDetections);
+        }
+
+        printParserPerfStats(summarizeParserPerf(elapsedMs));
+    } else if (!parserFunc(layerInfos, netInfo, detParams, detections)) {
         std::cerr << "Parser returned false.\n";
         dlclose(soHandle);
         return 1;
