@@ -1,0 +1,6 @@
+{
+  "_comment": "Ground-truth L2-normalised embedding produced by the Python pipeline (_embed method). Replace the values below with the actual output from: vectors / (np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-9) for your test image.",
+  "embedding": [
+    0.0, 0.0, 0.0
+  ]
+}

@@ -22,6 +22,7 @@
  *   --dump-mask               Save intermediate mask images to output/.
  *   --no-display              Skip cv::imshow() even when DISPLAY is available.
  *   --compare <expected.json> Run golden regression test.
+ *   --embed-compare <gt.json> Embedding correctness test (Cosine, L2, MAE, MaxAE).
  *   --perf                    Print custom parser timing metrics.
  *   --perf-iters <int>        Parser-only iterations for performance probe.
  *
@@ -93,9 +94,11 @@ static void printUsage(const char* prog) {
         "  --dump-tensor               Save raw output tensors\n"
         "  --dump-mask                 Save intermediate mask images\n"
         "  --no-display                Skip imshow()\n"
-        "  --compare     <expected.json>  Golden regression test\n"
-        "  --perf                     Print custom parser timing metrics\n"
-        "  --perf-iters  <int>         Parser-only iterations for performance probe\n";
+        "  --compare       <expected.json>  Golden regression test\n"
+        "  --embed-compare <gt.json>        Embedding correctness test against ground-truth JSON\n"
+        "                                   JSON: {\"embedding\": [f0,f1,...]} or bare array\n"
+        "  --perf                           Print custom parser timing metrics\n"
+        "  --perf-iters    <int>            Parser-only iterations for performance probe\n";
 }
 
 static bool getArg(const std::vector<std::string>& args,
@@ -118,7 +121,7 @@ static const char* const KNOWN_FLAGS[] = {
     "--image", "--model", "--output", "--conf",
     "--num-classes", "--classes", "--width", "--height",
     "--dump-tensor", "--dump-mask", "--no-display",
-    "--compare", "--parser-so", "--parser-func",
+    "--compare", "--embed-compare", "--parser-so", "--parser-func",
     "--perf", "--perf-iters",
     "--help", "-h", nullptr
 };
@@ -298,6 +301,117 @@ static void freeMasks(std::vector<NvDsInferInstanceMaskInfo>& objs) {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Embedding correctness metrics                                               */
+/* -------------------------------------------------------------------------- */
+
+struct EmbeddingMetrics {
+    double cosineSimilarity;
+    double l2Distance;
+    double maxAbsError;
+    double meanAbsError;
+};
+
+static EmbeddingMetrics computeEmbeddingMetrics(
+    const float* pred, const float* gt, size_t dim)
+{
+    double dot = 0.0, normP = 0.0, normG = 0.0;
+    double sumAbsErr = 0.0, maxAbsErr = 0.0, sumSqDiff = 0.0;
+
+    for (size_t i = 0; i < dim; ++i) {
+        const double p = static_cast<double>(pred[i]);
+        const double g = static_cast<double>(gt[i]);
+        dot      += p * g;
+        normP    += p * p;
+        normG    += g * g;
+        const double absErr = std::fabs(p - g);
+        sumAbsErr += absErr;
+        if (absErr > maxAbsErr) maxAbsErr = absErr;
+        const double diff = p - g;
+        sumSqDiff += diff * diff;
+    }
+
+    EmbeddingMetrics m{};
+    const double denom = std::sqrt(normP) * std::sqrt(normG);
+    m.cosineSimilarity = (denom > 1e-12) ? dot / denom : 0.0;
+    m.l2Distance       = std::sqrt(sumSqDiff);
+    m.maxAbsError      = maxAbsErr;
+    m.meanAbsError     = (dim > 0) ? sumAbsErr / static_cast<double>(dim) : 0.0;
+    return m;
+}
+
+/**
+ * Loads a ground-truth embedding from a JSON file and computes similarity /
+ * error metrics against the first object's mask in `actual`.
+ *
+ * JSON format (either accepted):
+ *   {"embedding": [f0, f1, ...]}   — object with "embedding" key
+ *   [f0, f1, ...]                  — bare JSON array
+ *
+ * The parser stores the embedding in NvDsInferInstanceMaskInfo::mask with
+ * mask_width == feature_dim (e.g. 384 for DINOv3).
+ */
+static bool runEmbeddingTest(
+    const std::string& gtPath,
+    const std::vector<NvDsInferInstanceMaskInfo>& actual)
+{
+    std::ifstream f(gtPath);
+    if (!f) {
+        std::cerr << "[embed-compare] Cannot open " << gtPath << "\n";
+        return false;
+    }
+
+    json gtJson;
+    try { f >> gtJson; }
+    catch (const json::exception& e) {
+        std::cerr << "[embed-compare] JSON parse error: " << e.what() << "\n";
+        return false;
+    }
+
+    /* Accept {"embedding": [...]} or a bare JSON array. */
+    const json* embArr = nullptr;
+    if (gtJson.is_array()) {
+        embArr = &gtJson;
+    } else if (gtJson.contains("embedding") && gtJson["embedding"].is_array()) {
+        embArr = &gtJson["embedding"];
+    } else {
+        std::cerr << "[embed-compare] Expected a JSON array or {\"embedding\": [...]}\n";
+        return false;
+    }
+
+    std::vector<float> gtVec;
+    gtVec.reserve(embArr->size());
+    for (const auto& v : *embArr)
+        gtVec.push_back(static_cast<float>(v.get<double>()));
+
+    if (actual.empty() || actual[0].mask == nullptr) {
+        std::cerr << "[embed-compare] Parser output contains no embedding (mask is null).\n";
+        return false;
+    }
+
+    const NvDsInferInstanceMaskInfo& obj = actual[0];
+    const size_t dim = obj.mask_width;
+
+    if (dim != gtVec.size()) {
+        std::cerr << "[embed-compare] Dimension mismatch: parser=" << dim
+                  << " ground_truth=" << gtVec.size() << "\n";
+        return false;
+    }
+
+    const EmbeddingMetrics m = computeEmbeddingMetrics(obj.mask, gtVec.data(), dim);
+
+    std::cout << "\n=== Embedding Correctness Report ===\n"
+              << std::fixed << std::setprecision(8)
+              << "  Dimensions        : " << dim << "\n"
+              << "  Cosine Similarity : " << m.cosineSimilarity << "\n"
+              << "  L2 Distance       : " << m.l2Distance << "\n"
+              << "  Max Abs Error     : " << m.maxAbsError << "\n"
+              << "  Mean Abs Error    : " << m.meanAbsError << "\n"
+              << std::defaultfloat;
+
+    return true;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Parser performance probe                                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -366,7 +480,7 @@ int main(int argc, char* argv[])
     /* ------------------------------------------------------------------ */
     /* Parse CLI arguments.                                                 */
     /* ------------------------------------------------------------------ */
-    std::string imagePath, modelPath, outputPath, comparePath;
+    std::string imagePath, modelPath, outputPath, comparePath, embedComparePath;
     std::string confStr, numClassesStr, widthStr, heightStr, perfItersStr;
     std::string parserSoPath, parserFuncName;
     bool dumpTensor = hasFlag(args, "--dump-tensor");
@@ -381,9 +495,10 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    getArg(args, "--output",      outputPath);
-    getArg(args, "--compare",     comparePath);
-    getArg(args, "--conf",        confStr);
+    getArg(args, "--output",        outputPath);
+    getArg(args, "--compare",       comparePath);
+    getArg(args, "--embed-compare", embedComparePath);
+    getArg(args, "--conf",          confStr);
     getArg(args, "--num-classes", numClassesStr);
     getArg(args, "--width",       widthStr);
     getArg(args, "--height",      heightStr);
@@ -613,9 +728,18 @@ int main(int argc, char* argv[])
     }
 
     /* ------------------------------------------------------------------ */
-    /* Step 7 – Visualization.                                              */
+    /* Step 7 – Embedding correctness test (optional).                      */
     /* ------------------------------------------------------------------ */
-    std::cout << "\n[Step 7] Visualizing results.\n";
+    if (!embedComparePath.empty()) {
+        std::cout << "\n[Step 7] Embedding correctness test against: "
+                  << embedComparePath << "\n";
+        runEmbeddingTest(embedComparePath, detections);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Step 8 – Visualization.                                              */
+    /* ------------------------------------------------------------------ */
+    std::cout << "\n[Step 8] Visualizing results.\n";
     cv::Mat resultImg = Visualizer::visualize(
         origImage, detections, classNames, netInfo, ppInfo,
         dumpMask, outDir);
@@ -624,10 +748,10 @@ int main(int argc, char* argv[])
     Visualizer::showAndSave(resultImg, winName, outputPath);
 
     /* ------------------------------------------------------------------ */
-    /* Step 8 – Golden regression test (optional).                          */
+    /* Step 9 – Golden regression test (optional).                          */
     /* ------------------------------------------------------------------ */
     if (!comparePath.empty()) {
-        std::cout << "\n[Step 8] Running golden regression test.\n";
+        std::cout << "\n[Step 9] Running golden regression test.\n";
         const bool pass = runGoldenTest(comparePath, detections);
         freeMasks(detections);
         dlclose(soHandle);
